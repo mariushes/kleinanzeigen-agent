@@ -1,0 +1,38 @@
+{
+  "success": true,
+  "results": [
+    {
+      "adid": "3453063010",
+      "url": "https://www.kleinanzeigen.de/s-anzeige/volkswagen-t5-multivan-2-0-tdi-led-navi-ahk-lang/3453063010-216-8243",
+      "title": "Volkswagen T5 Multivan 2.0 TDI LED Navi AHK Lang",
+      "price": "12900",
+      "description": "Öldruckprobleme! Geringer Kühlwasserverbauch 1,0 liter bei 3.000km",
+      "published_at": "2026-07-07T12:25:00"
+    },
+    {
+      "adid": "3453008995",
+      "url": "https://www.kleinanzeigen.de/s-anzeige/volkswagen-t5-transporter-2-0-tdi-180-ps-9-sitzer-automatik/3453008995-216-3431",
+      "title": "Volkswagen T5 Transporter 2.0 TDI 180 PS 9.Sitzer AUTOMATIK",
+      "price": "12900",
+      "description": "Tüv Neu gegen Aufpreis",
+      "published_at": "2026-07-07T11:23:00"
+    },
+    {
+      "adid": "3388658308",
+      "url": "https://www.kleinanzeigen.de/s-anzeige/suche-vw-t5-t6-mit-motorschaden/3388658308-216-4833",
+      "title": "Suche VW T5 T6 mit Motorschaden Unfall",
+      "price": "",
+      "description": "Wir kaufen alle Autos",
+      "published_at": "2026-07-06T09:10:00"
+    }
+  ],
+  "unique_results": 3,
+  "total_results": 1830,
+  "time_taken": 4.2,
+  "performance_metrics": {
+    "pages_requested": 1,
+    "pages_successful": 1,
+    "success_rate": 100.0,
+    "average_page_time": 4.2
+  }
+}

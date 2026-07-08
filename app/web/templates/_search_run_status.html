@@ -1,0 +1,22 @@
+{% if run %}
+<div id="search-run-status"
+     {% if run.status in ("pending", "running") %}
+     hx-get="/search-runs/{{ run.id }}/status"
+     hx-trigger="every 2s"
+     hx-swap="outerHTML"
+     {% endif %}>
+    {% if run.status == "pending" %}
+        <p>Queued: {{ run.search_url }}</p>
+    {% elif run.status == "running" %}
+        <p>
+            Scanning… scraped {{ run.counts.get("scraped", 0) }}/{{ run.max_listings }}
+            (skipped {{ run.counts.get("skipped_wanted_ads", 0) }} wanted-ads),
+            analyzed {{ run.counts.get("analyzed", 0) }}/{{ run.counts.get("scraped", 0) }}
+        </p>
+    {% elif run.status == "done" %}
+        <p>Done — analyzed {{ run.counts.get("analyzed", 0) }} listings.</p>
+    {% elif run.status == "error" %}
+        <p style="color:#b31d28">Search run failed: {{ run.error }}</p>
+    {% endif %}
+</div>
+{% endif %}

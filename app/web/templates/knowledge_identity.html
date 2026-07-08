@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}{{ identity.canonical_label if identity else "Not found" }}{% endblock %}
+{% block content %}
+{% if identity is none %}
+    <h1>Vehicle not found</h1>
+    <p><a href="/knowledge">Back to knowledge base</a></p>
+{% else %}
+    <p><a href="/knowledge">&larr; Back to knowledge base</a></p>
+    <h1>Knowledge: <code>{{ identity.canonical_label }}</code></h1>
+
+    <p>
+        {{ entries | length }} entr{{ "y" if entries | length == 1 else "ies" }} ·
+        research angles covered:
+        {% if covered_angles %}{{ covered_angles | join(", ") }}{% else %}none recorded{% endif %}
+        <form method="post" action="/knowledge/{{ identity.id }}/collect" style="display:inline; margin:0 0 0 1rem">
+            <button type="submit">Collect more</button>
+        </form>
+    </p>
+
+    {% if entries %}
+    <table>
+        <thead>
+            <tr><th>Type</th><th>Component</th><th>Detail</th><th>Mentions</th><th>Confidence</th><th>Source</th></tr>
+        </thead>
+        <tbody>
+            {% for e in entries %}
+            <tr>
+                <td>{{ e.entry_type }}</td>
+                <td>{{ e.payload.get("component", "") }}</td>
+                <td>
+                    {{ e.payload.get("detail", "") }}
+                    {% if e.source_quote %}<br><em>"{{ e.source_quote }}"</em>{% endif %}
+                </td>
+                <td>{{ e.mention_count }}</td>
+                <td>{{ "%.2f"|format(e.confidence) }}</td>
+                <td><a href="{{ e.source_url }}" target="_blank" rel="noopener">{{ e.payload.get("source_label") or "source" }} ↗</a></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p>No entries yet. Use “Collect more” to research this model.</p>
+    {% endif %}
+{% endif %}
+{% endblock %}

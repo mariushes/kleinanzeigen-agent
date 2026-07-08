@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}{{ listing.title if listing else "Not found" }}{% endblock %}
+{% block content %}
+{% if listing is none %}
+    <h1>Listing not found</h1>
+    <p><a href="/">Back to dashboard</a></p>
+{% else %}
+    <p><a href="/">&larr; Back to dashboard</a></p>
+    <h1>{{ listing.title }}</h1>
+    <p>
+        <strong>{{ listing.price_eur }} €</strong>
+        · {{ listing.year }} · {{ listing.mileage_km }} km
+        {% if listing.location %} · {{ listing.location }}{% endif %}
+        {% if listing.seller_type %} · {{ listing.seller_type }} seller{% endif %}
+        · <a href="{{ listing.url }}" target="_blank" rel="noopener">View on Kleinanzeigen ↗</a>
+    </p>
+    {% if listing.identity %}
+        <p>Identified as: <code>{{ listing.identity.canonical_label }}</code></p>
+    {% endif %}
+
+    {% if analysis is none %}
+        <p>This listing has not been analyzed yet.</p>
+    {% else %}
+    <section>
+        <h2>
+            Verdict:
+            <span class="tier-{{ analysis.tier }}">{{ analysis.tier }}</span>
+            — score {{ analysis.overall_score }}/100
+        </h2>
+        <p style="white-space: pre-line">{{ analysis.reasoning_text }}</p>
+    </section>
+
+    <section>
+        <h2>Condition</h2>
+        {% if analysis.condition.findings %}
+        <table>
+            <thead><tr><th>Severity</th><th>Category</th><th>Finding</th><th>Quote</th></tr></thead>
+            <tbody>
+                {% for f in analysis.condition.findings %}
+                <tr>
+                    <td class="severity-{{ f.severity }}">{{ f.severity }}</td>
+                    <td>{{ f.category }}</td>
+                    <td>{{ f.description }}</td>
+                    <td>{% if f.supporting_quote %}<em>"{{ f.supporting_quote }}"</em>{% endif %}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p>No red flags found.</p>
+        {% endif %}
+        {% if analysis.condition.positive_signals %}
+        <p><strong>Positive signals:</strong> {{ analysis.condition.positive_signals | join(", ") }}</p>
+        {% endif %}
+    </section>
+
+    <section>
+        <h2>Price</h2>
+        <p>
+            Verdict: <strong>{{ analysis.price.tier }}</strong>
+            (confidence: {{ analysis.price.confidence }})
+            {% if analysis.price.fair_price_range %}
+            — estimated fair range {{ analysis.price.fair_price_range.low_eur }}–{{ analysis.price.fair_price_range.high_eur }} €
+            {% endif %}
+        </p>
+        <p style="white-space: pre-line">{{ analysis.price.reasoning }}</p>
+    </section>
+
+    <section>
+        <h2>Reliability knowledge</h2>
+        {% if knowledge_is_newer %}
+        <p style="background:#fff8c5; padding:0.5rem; border-radius:4px">
+            New knowledge has been collected for this model since this verdict was computed.
+            <form method="post" action="/listings/{{ listing.id }}/reanalyze" style="display:inline; margin:0">
+                <button type="submit">Re-analyze against current knowledge</button>
+            </form>
+        </p>
+        {% endif %}
+        {% if kb_entries %}
+        <p>Match tier: <code>{{ kb_tier }}</code></p>
+        <table>
+            <thead><tr><th>Type</th><th>Component</th><th>Detail</th><th>Mentions</th><th>Source</th></tr></thead>
+            <tbody>
+                {% for e in kb_entries %}
+                <tr>
+                    <td>{{ e.entry_type }}</td>
+                    <td>{{ e.payload.get("component", "") }}</td>
+                    <td>
+                        {{ e.payload.get("detail", "") }}
+                        {% if e.source_quote %}<br><em>"{{ e.source_quote }}"</em>{% endif %}
+                    </td>
+                    <td>{{ e.mention_count }}</td>
+                    <td><a href="{{ e.source_url }}" target="_blank" rel="noopener">{{ e.payload.get("source_label") or "source" }} ↗</a></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p>
+            No knowledge base coverage yet for this vehicle configuration
+            {% if listing.identity %}(<code>{{ listing.identity.canonical_label }}</code>){% endif %}.
+            Knowledge collection for this model will populate this section.
+        </p>
+        {% endif %}
+    </section>
+
+    <section>
+        <h2>Description</h2>
+        <details>
+            <summary>Show original listing description</summary>
+            <p style="white-space: pre-line">{{ listing.description_text }}</p>
+        </details>
+    </section>
+    {% endif %}
+{% endif %}
+{% endblock %}

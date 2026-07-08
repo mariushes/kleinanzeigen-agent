@@ -1,0 +1,59 @@
+{
+  "success": true,
+  "time_taken": 1.52,
+  "data": {
+    "id": "3453063010",
+    "scraped_at": "2026-07-07T10:46:24+00:00",
+    "url_requested": "https://www.kleinanzeigen.de/s-anzeige/3453063010-216-8243",
+    "url_redirected": "https://www.kleinanzeigen.de/s-anzeige/volkswagen-t5-multivan-2-0-tdi-led-navi-ahk-lang/3453063010-216-8243",
+    "categories": ["Kleinanzeigen", "Auto, Rad & Boot", "Autos"],
+    "title": "Volkswagen T5 Multivan 2.0 TDI LED Navi AHK Lang",
+    "status": "active",
+    "price": {"amount": "12900", "currency": "€", "negotiable": false},
+    "delivery": null,
+    "location": {"zip": "74196", "city": "Neuenstadt", "state": "Baden-Württemberg"},
+    "media": {
+      "images": {
+        "count": 2,
+        "urls": [
+          "https://img.kleinanzeigen.de/api/v1/prod-ads/images/76/76941f54-c8b5-4a07-8583-8c9f67d8a1c8?rule=$_59.AUTO",
+          "https://img.kleinanzeigen.de/api/v1/prod-ads/images/f3/f350c377-5735-43a1-883c-bbdaaf5bf6d4?rule=$_59.AUTO"
+        ]
+      },
+      "videos": {"count": 0, "urls": []},
+      "audios": {"count": 0, "urls": []}
+    },
+    "details": {
+      "Marke": "Volkswagen",
+      "Modell": "T5 Multivan",
+      "Kilometerstand": "207.149 km",
+      "Fahrzeugzustand": "Unbeschädigtes Fahrzeug",
+      "Erstzulassung": "Januar 2014",
+      "Kraftstoffart": "Diesel",
+      "Leistung": "179 PS",
+      "Getriebe": "Automatik",
+      "Fahrzeugtyp": "Van/Bus",
+      "Anzahl Türen": "4/5",
+      "HU bis": "Januar 2027",
+      "Umweltplakette": "4 (Grün)",
+      "Schadstoffklasse": "Euro5",
+      "Außenfarbe": "Weiß",
+      "Material Innenausstattung": "Stoff"
+    },
+    "features": [
+      "Anhängerkupplung", "Einparkhilfe", "Leichtmetallfelgen", "Xenon-/LED-Scheinwerfer",
+      "Klimaanlage", "Navigationssystem", "Bluetooth", "Sitzheizung", "Tempomat",
+      "Antiblockiersystem (ABS)", "Scheckheftgepflegt"
+    ],
+    "description": "Öldruckprobleme! Geringer Kühlwasserverbauch 1,0 liter bei 3.000km. Servicehistorie vorhanden.",
+    "seller": {
+      "name": "Cars27",
+      "user_id": "137656165",
+      "since": "01.02.2024",
+      "type": "business",
+      "badges": []
+    },
+    "extra_info": {"created_at": "07.07.2026", "views": "55"}
+  },
+  "performance_metrics": {"success_rate": 100.0, "time_taken": 1.519}
+}

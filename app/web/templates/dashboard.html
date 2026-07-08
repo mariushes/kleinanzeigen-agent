@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<h1>Van listings</h1>
+<form action="/search-runs" method="post">
+    <input type="url" name="search_url" placeholder="Kleinanzeigen search URL" size="60" required>
+    <input type="number" name="max_listings" value="{{ default_max_listings }}" min="1" max="{{ max_listings_hard_cap }}">
+    <button type="submit">Scan</button>
+</form>
+
+{% if active_run %}
+    {% with run = active_run %}{% include "_search_run_status.html" %}{% endwith %}
+{% endif %}
+
+{% if rows %}
+<p>
+    Sort by:
+    <a href="/?sort=score">score</a> ·
+    <a href="/?sort=price">price</a> ·
+    <a href="/?sort=mileage">mileage</a>
+</p>
+<table>
+    <thead>
+        <tr><th>Title</th><th>Price</th><th>Year</th><th>Mileage</th><th>Score</th><th>Verdict</th></tr>
+    </thead>
+    <tbody>
+        {% for row in rows %}
+        <tr>
+            <td><a href="/listings/{{ row.listing.id }}">{{ row.listing.title }}</a></td>
+            <td>{{ row.listing.price_eur }} €</td>
+            <td>{{ row.listing.year }}</td>
+            <td>{{ row.listing.mileage_km }} km</td>
+            <td>{{ row.analysis.overall_score }}</td>
+            <td class="tier-{{ row.analysis.tier }}">{{ row.analysis.tier }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>No listings analyzed yet. Paste a search URL above to get started.</p>
+{% endif %}
+{% endblock %}

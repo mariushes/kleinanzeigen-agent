@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Knowledge base{% endblock %}
+{% block content %}
+<h1>Knowledge base</h1>
+
+<p>
+    LLM usage so far: <strong>{{ llm_call_count }}</strong> calls ·
+    {{ llm_input_tokens }} input + {{ llm_output_tokens }} output tokens.
+</p>
+
+<p>
+    Collecting knowledge runs up to {{ max_queries }} grounded web-search queries per
+    model and extracts reliability facts (known problems, mileage expectations, config
+    advice, price points) with source citations.
+</p>
+
+{% if coverage %}
+<table>
+    <thead>
+        <tr><th>Vehicle</th><th>Listings</th><th>KB entries</th><th></th></tr>
+    </thead>
+    <tbody>
+        {% for row in coverage %}
+        <tr>
+            <td><code>{{ row.identity.canonical_label }}</code></td>
+            <td>{{ row.listing_count }}</td>
+            <td>
+                {% if row.entry_count %}
+                <a href="/knowledge/{{ row.identity.id }}">{{ row.entry_count }}</a>
+                {% else %}0{% endif %}
+            </td>
+            <td>
+                <form method="post" action="/knowledge/{{ row.identity.id }}/collect" style="margin:0">
+                    <button type="submit">
+                        {% if row.entry_count %}Refresh{% else %}Collect{% endif %}
+                    </button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+<p><small>Collection runs in the background and spends free-tier quota — reload this page after a minute to see new entries.</small></p>
+{% else %}
+<p>No vehicle identities yet. Run a search from the <a href="/">dashboard</a> first — identities are created as listings are analyzed.</p>
+{% endif %}
+{% endblock %}

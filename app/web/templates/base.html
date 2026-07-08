@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Kleinanzeigen Van Agent{% endblock %}</title>
+    <script src="https://unpkg.com/htmx.org@2.0.3" defer></script>
+    <style>
+        body { font-family: system-ui, sans-serif; margin: 2rem; background: #fafafa; color: #1a1a1a; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid #ddd; }
+        nav a { margin-right: 1rem; }
+        .tier-buy_candidate { color: #1a7f37; font-weight: bold; }
+        .tier-caution { color: #9a6700; font-weight: bold; }
+        .tier-avoid { color: #b31d28; font-weight: bold; }
+        .tier-insufficient_data { color: #666; font-weight: bold; }
+        .severity-high { color: #b31d28; font-weight: bold; }
+        .severity-medium { color: #9a6700; font-weight: bold; }
+        .severity-low { color: #666; }
+        section { margin-top: 1.5rem; }
+        code { background: #eee; padding: 0.1rem 0.3rem; border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <nav>
+        <a href="/">Dashboard</a>
+        <a href="/knowledge">Knowledge base</a>
+    </nav>
+    <hr>
+    {% block content %}{% endblock %}
+</body>
+</html>
