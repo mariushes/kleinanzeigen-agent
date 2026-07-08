@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 from app.analysis.verdict import run_full_analysis
 from app.config import get_settings
-from app.db.models import Listing, SearchRun, VehicleIdentity
+from app.db.models import KnowledgeEntry, KnowledgeResearchRun, Listing, SearchRun, VehicleIdentity
 from app.db.session import SessionLocal
 from app.knowledge.builder import build_knowledge_for_identity
 from app.knowledge.sources.web_search import WebSearchSource
@@ -18,6 +18,43 @@ from app.llm.gemini import GeminiProvider
 from app.llm.provider import LLMProvider
 from app.scraping.ingest import run_search
 from app.scraping.kleinanzeigen import KleinanzeigenClient
+from app.vehicles.identity import get_or_create_identity
+
+
+def _maybe_auto_collect(
+    db, provider: LLMProvider, identity: VehicleIdentity, collected_identity_ids: set[int]
+) -> bool:
+    """First knowledge pass for a never-researched identity, so the first verdict
+    already has reliability data. Budgeted per search run; fail-soft: a grounding
+    failure (quota, network) must never break the listing analysis itself."""
+    settings = get_settings()
+    if not settings.auto_collect_enabled:
+        return False
+    if identity.id in collected_identity_ids:
+        return False
+    if len(collected_identity_ids) >= settings.auto_collect_max_identities_per_run:
+        return False
+
+    never_researched = (
+        db.query(KnowledgeResearchRun).filter(KnowledgeResearchRun.identity_id == identity.id).first()
+        is None
+        and db.query(KnowledgeEntry).filter(KnowledgeEntry.identity_id == identity.id).first() is None
+    )
+    if not never_researched:
+        return False
+
+    collected_identity_ids.add(identity.id)
+    try:
+        build_knowledge_for_identity(
+            db,
+            provider,
+            WebSearchSource(provider, db),
+            identity,
+            max_queries=settings.auto_collect_max_queries,
+        )
+    except Exception:  # noqa: BLE001
+        db.rollback()
+    return True
 
 
 def execute_search_run(
@@ -40,11 +77,24 @@ def execute_search_run(
             "scraped": ingest_result.total_stored,
             "skipped_wanted_ads": ingest_result.skipped_wanted_ads,
             "analyzed": 0,
+            "knowledge_collected": 0,
         }
         db.commit()
 
         listings = db.query(Listing).filter(Listing.id.in_(ingest_result.listing_ids)).all()
+        collected_identity_ids: set[int] = set()
         for i, listing in enumerate(listings, start=1):
+            # Identity first (normally done inside run_full_analysis) so a brand-new
+            # model gets its first knowledge pass before its first verdict.
+            if listing.identity_id is None:
+                get_or_create_identity(db, provider, listing)
+            if _maybe_auto_collect(db, provider, listing.identity, collected_identity_ids):
+                search_run.counts = {
+                    **search_run.counts,
+                    "knowledge_collected": len(collected_identity_ids),
+                }
+                db.commit()
+
             run_full_analysis(db, provider, listing)
             search_run.counts = {**search_run.counts, "analyzed": i}
             db.commit()

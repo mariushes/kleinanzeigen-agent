@@ -86,6 +86,44 @@ cd vendor/ebay-kleinanzeigen-api && uv run uvicorn main:app --port 8000
   reason over the closest retrieved comparables (with annotated deltas) rather than
   computing a percentile/median — vehicle condition varies too much for pure stats to be
   meaningful. Don't reintroduce a stats-only price band.
-- **Confidence is always surfaced**: any verdict (price, reliability) that's based on
-  thin data (few comparables, no KB coverage) must say so explicitly rather than
-  presenting a falsely confident number.
+- **The verdict is one holistic LLM call, not a formula** (user decision): `judgment.py`
+  gets all the evidence at once — the ad's red flags, annotated comparables, KB facts and
+  the deterministic reliability read — and returns the 0–100 score, recommendation, and a
+  `good/fair/poor` rating + note per axis (price/condition/reliability/positives). Numbers
+  come from a judgment over real evidence, not arithmetic on penalties. Don't reintroduce
+  a neutral-baseline additive scorer or per-axis penalty constants for the headline score.
+- **Score = the model's read; confidence = how much we knew — kept separate.** Confidence
+  stays **deterministic** (`verdict.py::_combined_confidence`): floored by the weaker of
+  price-data presence and KB match tier, so a fluent verdict over thin data still reads as
+  low confidence. Absence of comparables/KB must lower *confidence*, never drag the score
+  down — tell the model this in the prompt too.
+- **`no_data` is stamped in code, not invented by the LLM** (user decision): the LLM only
+  rates `good/fair/poor`; `verdict.py::build_verdict` overrides an axis to `no_data`
+  (with `has_data=False`) when the evidence genuinely doesn't exist — no comparables for
+  price, no KB coverage for reliability. The UI shows grey "No data" so the user can tell
+  a neutral "fair" from a real absence of evidence. Condition/positives always have data
+  (they're about this ad's own text).
+- **Sub-scores are the product, the overall score is just a sort key** (user decision):
+  the UI leads with the four colored axis chips (dashboard) / axis cards (detail page) and
+  the holistic reasoning; the summed score is rendered muted. Don't reintroduce a big
+  headline score or signed ± contribution columns.
+- **Structured condition + KB extraction is still persisted** even though the verdict is
+  the holistic call: `condition.py` returns typed findings/positive_signals and the KB
+  keeps typed entries so they can be stored, listed, and reused for future price
+  comparison and retrieval. `condition.py` findings must stay listing-specific (ad red
+  flags only) — model-general reliability belongs on the reliability axis (KB rules +
+  holistic call), or it double-counts.
+- **The deterministic reliability read feeds the prompt and the evidence UI, not the
+  score directly.** `reliability_score.py` (transparent, symmetric rules over structured
+  KB fields — severity/onset_km/stance/sentiment, tier-scaled, `strength`/positive
+  `overall_assessment` earn bonus so aging models aren't ratcheted to "severe") is passed
+  into `judgment.py` as one input and shown as strengths/concerns bullets on the detail
+  page. It's evidence for the LLM's reliability rating, no longer a parallel headline
+  score — don't resurrect `score_llm_variant` or the dueling two-signal table.
+- **New models get a first knowledge pass automatically**: `execute_search_run`
+  auto-collects for identities that have never been researched (budgeted via
+  `auto_collect_*` settings, fail-soft on grounding errors) so first verdicts aren't
+  knowledge-blind. Don't remove the per-run budget — an all-new-models scan must not
+  drain the grounded quota.
+- **Confidence is always surfaced**: any verdict based on thin data (few comparables, no
+  KB coverage) must say so via the confidence label rather than a falsely confident score.

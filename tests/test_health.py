@@ -104,13 +104,23 @@ def test_listing_detail_renders_analysis_sections(db_session):
                 "positive_signals": ["Scheckheftgepflegt"],
                 "summary": "Some rust.",
             },
-            price={
-                "tier": "fair", "confidence": "medium",
-                "fair_price_range": {"low_eur": 11000, "high_eur": 13000},
-                "reasoning": "Priced in line with the closest comparable.",
+            price={"rating": "fair", "note": "Priced in line with the closest comparable."},
+            reliability={
+                "tier": None, "entry_ids": [],
+                "deterministic": {
+                    "level": "none", "penalty": 0, "bonus": 0,
+                    "drivers": [], "positives": [], "has_unrated_entries": False,
+                },
             },
-            reliability={"tier": None, "entry_ids": []},
-            overall_score=62, tier="caution", reasoning_text="Overall: some rust, price fair.",
+            overall_score=62, tier="caution", confidence="low",
+            reasoning_text="Overall: some rust, price fair.",
+            score_breakdown={
+                "overall_score": 62,
+                "price": {"rating": "no_data", "note": "No comparables yet.", "has_data": False},
+                "condition": {"rating": "fair", "note": "Some rust.", "has_data": True},
+                "reliability": {"rating": "no_data", "note": "No KB coverage.", "has_data": False},
+                "positives": {"rating": "good", "note": "Scheckheftgepflegt.", "has_data": True},
+            },
         )
     )
     db_session.commit()
@@ -119,10 +129,12 @@ def test_listing_detail_renders_analysis_sections(db_session):
 
     assert response.status_code == 200
     assert "VW T5 Detail Test" in response.text
+    # Verdict card shows the score and per-axis ratings.
     assert "62/100" in response.text
+    assert "Condition red flags" in response.text
+    # Axes without evidence render as "No data" rather than a neutral rating.
+    assert "No data" in response.text
     assert "Rust on sills" in response.text
-    assert "11000" in response.text and "13000" in response.text
-    assert "Priced in line with the closest comparable." in response.text
     assert "No knowledge base coverage yet" in response.text
 
 

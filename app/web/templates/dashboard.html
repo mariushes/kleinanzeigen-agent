@@ -21,21 +21,39 @@
 </p>
 <table>
     <thead>
-        <tr><th>Title</th><th>Price</th><th>Year</th><th>Mileage</th><th>Score</th><th>Verdict</th></tr>
+        <tr>
+            <th>Title</th><th>Price</th><th>Year</th><th>Mileage</th>
+            <th title="Is the asking price fair vs. comparable listings?">Price</th>
+            <th title="This ad's red flags and positive signals">Condition</th>
+            <th title="How dependable this model/engine configuration is, from the knowledge base">Reliability</th>
+            <th>Confidence</th><th>Verdict</th>
+        </tr>
     </thead>
     <tbody>
         {% for row in rows %}
+        {% set b = row.analysis.score_breakdown or {} %}
         <tr>
             <td><a href="/listings/{{ row.listing.id }}">{{ row.listing.title }}</a></td>
             <td>{{ row.listing.price_eur }} €</td>
             <td>{{ row.listing.year }}</td>
             <td>{{ row.listing.mileage_km }} km</td>
-            <td>{{ row.analysis.overall_score }}</td>
-            <td class="tier-{{ row.analysis.tier }}">{{ row.analysis.tier }}</td>
+            {% for key in ["price", "condition", "reliability"] %}
+            {% set ax = b.get(key) %}
+            <td>
+                {% if ax %}<span class="chip rating-{{ ax.rating }}">{{ "No data" if ax.rating == "no_data" else ax.rating }}</span>
+                {% else %}–{% endif %}
+            </td>
+            {% endfor %}
+            <td>{{ row.analysis.confidence or "–" }}</td>
+            <td class="tier-{{ row.analysis.tier }}">{{ row.analysis.tier }}
+                <small class="muted">({{ row.analysis.overall_score }})</small></td>
         </tr>
         {% endfor %}
     </tbody>
 </table>
+<p><small class="muted">Each axis is judged on its own — “No data” (grey) means we had no
+evidence for it yet, not that it's neutral. The number by the verdict is the overall score,
+used for sorting.</small></p>
 {% else %}
 <p>No listings analyzed yet. Paste a search URL above to get started.</p>
 {% endif %}

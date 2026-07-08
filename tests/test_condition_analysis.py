@@ -1,7 +1,11 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.analysis.condition import ConditionAnalysis, ConditionFinding, analyze_condition
+from app.analysis.condition import (
+    ConditionAnalysis,
+    ConditionFinding,
+    analyze_condition,
+)
 from app.db.models import Base, Listing, LlmCall
 from app.llm.provider import LLMCallResult
 

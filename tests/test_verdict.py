@@ -1,10 +1,12 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.analysis.comparables import Comparable, ComparablesResult
 from app.analysis.condition import ConditionAnalysis, ConditionFinding
-from app.analysis.pricing import FairPriceRange, PriceVerdict
-from app.analysis.verdict import combine_verdict, run_full_analysis
-from app.db.models import Analysis, Base, Listing, VehicleIdentity
+from app.analysis.judgment import AxisRating, Judgment
+from app.analysis.reliability_score import ReliabilityRisk
+from app.analysis.verdict import build_verdict, run_full_analysis
+from app.db.models import Analysis, Base, KnowledgeEntry, Listing, VehicleIdentity
 from app.knowledge.retrieval import ReliabilitySummary
 from app.llm.provider import LLMCallResult
 from app.vehicles.identity import ExtractedIdentity
@@ -16,66 +18,109 @@ def make_db():
     return sessionmaker(bind=engine)()
 
 
-def clean_condition():
-    return ConditionAnalysis(findings=[], positive_signals=["Scheckheftgepflegt", "TÜV neu"], summary="Clean listing.")
-
-
-def fair_price():
-    return PriceVerdict(
-        tier="fair", fair_price_range=FairPriceRange(low_eur=9000, high_eur=11000),
-        reasoning="In line with comparables.", confidence="high",
+def a_judgment(score=72, rec="buy_candidate"):
+    return Judgment(
+        overall_score=score,
+        recommendation=rec,
+        price=AxisRating(rating="fair", note="in line"),
+        condition=AxisRating(rating="good", note="clean"),
+        reliability=AxisRating(rating="good", note="dependable"),
+        positives=AxisRating(rating="good", note="documented"),
+        reasoning="Solid.",
     )
 
 
-def test_combine_verdict_clean_and_fair_scores_high_but_confidence_low_without_kb():
-    verdict = combine_verdict(clean_condition(), fair_price(), ReliabilitySummary())
+def a_comparable(db):
+    c = Listing(kleinanzeigen_id="c1", url="https://x", title="Comparable van", price_eur=9500)
+    db.add(c)
+    db.commit()
+    return ComparablesResult(
+        comparables=[Comparable(listing=c, tier="exact_identity", delta_description="+5,000 km")],
+        tier_counts={"exact_identity": 1},
+    )
 
+
+def no_det_risk():
+    return ReliabilityRisk(level="none", penalty=0)
+
+
+def test_score_and_recommendation_come_straight_from_the_judgment():
+    verdict = build_verdict(a_judgment(score=81), ComparablesResult(), ReliabilitySummary(), no_det_risk())
+    assert verdict.overall_score == 81
     assert verdict.tier == "buy_candidate"
-    assert verdict.overall_score >= 70
-    # Even a confident price verdict shouldn't read as high overall confidence with zero KB coverage.
+
+
+def test_axes_marked_no_data_when_evidence_absent():
+    # No comparables and empty KB → price and reliability read "no_data", not their LLM rating.
+    verdict = build_verdict(a_judgment(), ComparablesResult(), ReliabilitySummary(), no_det_risk())
+    b = verdict.score_breakdown
+    assert b["price"]["rating"] == "no_data"
+    assert b["price"]["has_data"] is False
+    assert b["reliability"]["rating"] == "no_data"
+    # Condition and positives are always about this ad, so they always have data.
+    assert b["condition"]["rating"] == "good"
+    assert b["condition"]["has_data"] is True
+    assert b["positives"]["rating"] == "good"
+
+
+def test_axes_keep_llm_rating_when_evidence_present():
+    db = make_db()
+    reliability = ReliabilitySummary(
+        entries=[KnowledgeEntry(entry_type="strength", payload={}, source_url="https://x")],
+        tier="exact_identity",
+    )
+    verdict = build_verdict(a_judgment(), a_comparable(db), reliability, no_det_risk())
+    b = verdict.score_breakdown
+    assert b["price"]["rating"] == "fair"
+    assert b["price"]["has_data"] is True
+    assert b["reliability"]["rating"] == "good"
+    assert b["reliability"]["has_data"] is True
+
+
+def test_confidence_low_without_kb_even_with_comparables():
+    db = make_db()
+    verdict = build_verdict(a_judgment(), a_comparable(db), ReliabilitySummary(), no_det_risk())
+    # Comparables present but zero KB coverage → floored to low.
     assert verdict.confidence == "low"
 
 
-def test_combine_verdict_confidence_is_high_with_exact_identity_kb_and_confident_price():
-    verdict = combine_verdict(clean_condition(), fair_price(), ReliabilitySummary(tier="exact_identity"))
-
+def test_confidence_high_with_comparables_and_exact_identity_kb():
+    db = make_db()
+    reliability = ReliabilitySummary(
+        entries=[KnowledgeEntry(entry_type="strength", payload={}, source_url="https://x")],
+        tier="exact_identity",
+    )
+    verdict = build_verdict(a_judgment(), a_comparable(db), reliability, no_det_risk())
     assert verdict.confidence == "high"
 
 
-def test_combine_verdict_penalizes_high_severity_findings_and_overpriced():
-    condition = ConditionAnalysis(
-        findings=[
-            ConditionFinding(category="project_car", severity="high", description="not running"),
-            ConditionFinding(category="accident_history", severity="high", description="warped body"),
-        ],
-        positive_signals=[],
-        summary="Parts car, not roadworthy.",
-    )
-    price = PriceVerdict(tier="overpriced", fair_price_range=None, reasoning="Too expensive for a parts car.", confidence="medium")
-
-    verdict = combine_verdict(condition, price, ReliabilitySummary())
-
-    assert verdict.tier == "avoid"
-    assert verdict.overall_score < 45
-
-
-def test_combine_verdict_reasoning_includes_all_three_sections():
-    verdict = combine_verdict(clean_condition(), fair_price(), ReliabilitySummary())
-
-    assert "Condition:" in verdict.reasoning
-    assert "Price:" in verdict.reasoning
-    assert "no knowledge base coverage yet" in verdict.reasoning
+def test_reliability_deterministic_read_is_preserved_for_evidence_display():
+    det = ReliabilityRisk(level="severe", penalty=32, drivers=["catastrophic: EGR cooler"])
+    verdict = build_verdict(a_judgment(), ComparablesResult(), ReliabilitySummary(tier="exact_identity"), det)
+    assert verdict.reliability["deterministic"]["level"] == "severe"
+    assert verdict.reliability["deterministic"]["drivers"] == ["catastrophic: EGR cooler"]
 
 
 class FakeProvider:
+    """Serves queued responses by type so the pipeline's ordered calls (identity →
+    condition → judgment) each get the right shape regardless of exact ordering."""
+
     def __init__(self, responses: list):
-        self._responses = iter(responses)
+        self._responses = list(responses)
 
     def structured_completion(self, *, purpose, system, user, response_model, model):
-        return LLMCallResult(parsed=next(self._responses), model=model, purpose=purpose, input_tokens=10, output_tokens=5)
+        for i, r in enumerate(self._responses):
+            if isinstance(r, response_model):
+                parsed = self._responses.pop(i)
+                return LLMCallResult(parsed=parsed, model=model, purpose=purpose, input_tokens=10, output_tokens=5)
+        raise AssertionError(f"no queued response of type {response_model.__name__}")
 
 
-def test_run_full_analysis_persists_analysis_row_and_sets_identity():
+def clean_condition():
+    return ConditionAnalysis(findings=[], positive_signals=["Scheckheftgepflegt"], summary="Clean.")
+
+
+def test_run_full_analysis_persists_row_sets_identity_and_breakdown():
     db = make_db()
     listing = Listing(kleinanzeigen_id="1", url="https://x", title="VW T5 Multivan", attributes={})
     db.add(listing)
@@ -84,6 +129,7 @@ def test_run_full_analysis_persists_analysis_row_and_sets_identity():
     provider = FakeProvider([
         ExtractedIdentity(brand="Volkswagen", model="T5 Multivan"),
         clean_condition(),
+        a_judgment(),
     ])
 
     analysis = run_full_analysis(db, provider, listing)
@@ -91,33 +137,36 @@ def test_run_full_analysis_persists_analysis_row_and_sets_identity():
     assert listing.identity_id is not None
     assert db.query(Analysis).count() == 1
     assert analysis.tier in {"buy_candidate", "caution", "avoid"}
-    assert analysis.llm_model is not None
-    assert analysis.price["tier"] == "insufficient_data"  # no comparables exist yet
+    assert analysis.confidence in {"low", "medium", "high"}
+    assert analysis.overall_score == 72
+    # No comparables yet → price axis reads no_data.
+    assert analysis.score_breakdown["price"]["rating"] == "no_data"
+    assert analysis.reliability["deterministic"]["level"] == "none"  # empty KB
 
 
-def test_run_full_analysis_uses_comparables_for_price_when_available():
+def test_run_full_analysis_deterministic_reliability_from_kb():
     db = make_db()
-    identity = VehicleIdentity(brand="Volkswagen", model="T5 Multivan", canonical_label="Volkswagen | T5 Multivan")
+    identity = VehicleIdentity(brand="Volkswagen", model="T5", canonical_label="Volkswagen | T5 | 2.0 TDI 179")
     db.add(identity)
     db.commit()
-
-    other = Listing(
-        kleinanzeigen_id="other", url="https://x", title="Comparable van", price_eur=9500,
-        mileage_km=100000, year=2015, attributes={}, identity_id=identity.id,
+    db.add(
+        KnowledgeEntry(
+            identity_id=identity.id, entry_type="common_problem",
+            payload={"component": "EGR cooler", "detail": "catastrophic", "severity": "catastrophic", "onset_km": 120000},
+            source_url="https://x", confidence=0.6,
+        )
     )
-    target = Listing(
-        kleinanzeigen_id="target", url="https://x", title="Target van", price_eur=10000,
-        mileage_km=105000, year=2015, attributes={}, identity_id=identity.id,
+    listing = Listing(
+        kleinanzeigen_id="t", url="https://x", title="high miles", mileage_km=314000,
+        attributes={}, identity_id=identity.id,
     )
-    db.add_all([other, target])
+    db.add(listing)
     db.commit()
 
-    provider = FakeProvider([
-        clean_condition(),
-        fair_price(),
-    ])
+    provider = FakeProvider([clean_condition(), a_judgment(score=40, rec="avoid")])
+    analysis = run_full_analysis(db, provider, listing)
 
-    analysis = run_full_analysis(db, provider, target)
-
-    assert analysis.price["tier"] == "fair"
-    assert analysis.overall_score >= 70
+    # Deterministic read (catastrophic + past onset, exact tier → severe) is preserved as evidence.
+    assert analysis.reliability["deterministic"]["level"] == "severe"
+    # KB coverage exists → reliability axis carries the LLM rating, not no_data.
+    assert analysis.score_breakdown["reliability"]["has_data"] is True

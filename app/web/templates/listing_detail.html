@@ -21,17 +21,48 @@
     {% if analysis is none %}
         <p>This listing has not been analyzed yet.</p>
     {% else %}
+
+    {% if knowledge_is_newer %}
+    <div class="banner">
+        <strong>New knowledge has been collected for this model</strong> since this verdict was
+        computed — the assessment below may be outdated.
+        <form method="post" action="/listings/{{ listing.id }}/reanalyze" style="display:inline; margin:0 0 0 0.5rem">
+            <button type="submit">Re-analyze against current knowledge</button>
+        </form>
+    </div>
+    {% endif %}
+
+    {% set b = analysis.score_breakdown or {} %}
     <section>
         <h2>
             Verdict:
             <span class="tier-{{ analysis.tier }}">{{ analysis.tier }}</span>
-            — score {{ analysis.overall_score }}/100
+            <small class="muted">· score {{ analysis.overall_score }}/100</small>
+            {% if analysis.confidence %}<small class="muted">· confidence: {{ analysis.confidence }}</small>{% endif %}
         </h2>
+
+        {% if b %}
+        <div class="axes">
+            {% for key, label in [("price", "Price"), ("condition", "Condition"), ("reliability", "Model reliability"), ("positives", "Positive signals")] %}
+            {% set ax = b.get(key) %}
+            {% if ax %}
+            <div class="axis rating-{{ ax.rating }}">
+                <div class="axis-label">{{ label }}</div>
+                <div class="axis-rating">{{ "No data" if ax.rating == "no_data" else ax.rating }}</div>
+                {% if ax.note %}<div class="axis-note">{{ ax.note }}</div>{% endif %}
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+        <p><small class="muted">Each axis is judged on its own — a grey “No data” means we
+        had no evidence for it yet (not that it's neutral). The score is the model's overall
+        read, used mainly for sorting; the axes and reasoning are what to act on.</small></p>
+        {% endif %}
         <p style="white-space: pre-line">{{ analysis.reasoning_text }}</p>
     </section>
 
     <section>
-        <h2>Condition</h2>
+        <h2>Condition red flags (this ad)</h2>
         {% if analysis.condition.findings %}
         <table>
             <thead><tr><th>Severity</th><th>Category</th><th>Finding</th><th>Quote</th></tr></thead>
@@ -47,35 +78,35 @@
             </tbody>
         </table>
         {% else %}
-        <p>No red flags found.</p>
+        <p>No red flags found in this ad's text.</p>
         {% endif %}
         {% if analysis.condition.positive_signals %}
         <p><strong>Positive signals:</strong> {{ analysis.condition.positive_signals | join(", ") }}</p>
         {% endif %}
     </section>
 
+    {% set det = (analysis.reliability or {}).get("deterministic") %}
     <section>
-        <h2>Price</h2>
-        <p>
-            Verdict: <strong>{{ analysis.price.tier }}</strong>
-            (confidence: {{ analysis.price.confidence }})
-            {% if analysis.price.fair_price_range %}
-            — estimated fair range {{ analysis.price.fair_price_range.low_eur }}–{{ analysis.price.fair_price_range.high_eur }} €
-            {% endif %}
-        </p>
-        <p style="white-space: pre-line">{{ analysis.price.reasoning }}</p>
+        <h2>Model reliability — strengths &amp; concerns (KB)</h2>
+        {% if det and (det.drivers or det.positives) %}
+        {% if det.drivers %}
+        <p><strong>Concerns:</strong></p>
+        <ul>{% for d in det.drivers %}<li>{{ d }}</li>{% endfor %}</ul>
+        {% endif %}
+        {% if det.positives %}
+        <p><strong>Strengths:</strong></p>
+        <ul>{% for p in det.positives %}<li style="color:#1a7f37">{{ p }}</li>{% endfor %}</ul>
+        {% endif %}
+        {% if det.has_unrated_entries %}
+        <p><small>Some entries lack severity data — re-collect this model for sharper scoring.</small></p>
+        {% endif %}
+        {% else %}
+        <p>No rated knowledge-base facts for this model yet.</p>
+        {% endif %}
     </section>
 
     <section>
-        <h2>Reliability knowledge</h2>
-        {% if knowledge_is_newer %}
-        <p style="background:#fff8c5; padding:0.5rem; border-radius:4px">
-            New knowledge has been collected for this model since this verdict was computed.
-            <form method="post" action="/listings/{{ listing.id }}/reanalyze" style="display:inline; margin:0">
-                <button type="submit">Re-analyze against current knowledge</button>
-            </form>
-        </p>
-        {% endif %}
+        <h2>Reliability knowledge base (source entries)</h2>
         {% if kb_entries %}
         <p>Match tier: <code>{{ kb_tier }}</code></p>
         <table>

@@ -30,11 +30,12 @@ _CONFIDENCE_CAP = 0.95
 # Ordered pool of distinct research angles. A collection run consumes the next uncovered
 # angles for the identity, so successive runs broaden coverage instead of repeating.
 RESEARCH_ANGLES: list[tuple[str, str]] = [
-    ("common_problems", "common problems, known weak points, and reliability issues"),
+    ("common_problems", "common problems and known weak points, but also which parts are considered robust and trouble-free"),
+    ("overall_reputation", "overall reliability reputation and long-term durability verdict — is it considered dependable for its class and age, what do owners praise, and what total mileages do well-maintained examples reach"),
     ("variants_mileage", "which engine and trim variants to buy or avoid, and what mileage is considered high or concerning"),
-    ("engine_turbo", "engine, turbocharger, injector, EGR and timing chain/belt problems and their repair costs"),
-    ("gearbox", "gearbox and clutch problems (manual, automatic, DSG) and known failure mileages"),
-    ("rust_body", "rust, corrosion, body and chassis weak spots to inspect"),
+    ("engine_turbo", "engine, turbocharger, injector, EGR and timing chain/belt problems and their repair costs — and whether the engine is otherwise considered durable"),
+    ("gearbox", "gearbox and clutch problems (manual, automatic, DSG) and known failure mileages — and which gearbox variants are considered solid"),
+    ("rust_body", "rust, corrosion, body and chassis weak spots to inspect — and how rust-resistant the model is compared to rivals"),
     ("electrics", "electrical, electronics, sensor and comfort-feature faults"),
     ("running_costs", "typical maintenance intervals, running costs, and expensive scheduled jobs"),
     ("buyer_checklist", "what to check on a test drive and pre-purchase inspection for this model"),
@@ -154,6 +155,10 @@ def build_knowledge_for_identity(
                             "component": entry.component,
                             "detail": entry.detail,
                             "source_label": source_label,
+                            "severity": entry.severity,
+                            "onset_km": entry.onset_km,
+                            "stance": entry.stance_for_this_vehicle,
+                            "sentiment": entry.sentiment,
                         },
                         source_url=source_url,
                         source_quote=entry.supporting_quote,

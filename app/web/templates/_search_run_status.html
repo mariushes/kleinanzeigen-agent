@@ -12,6 +12,9 @@
             Scanning… scraped {{ run.counts.get("scraped", 0) }}/{{ run.max_listings }}
             (skipped {{ run.counts.get("skipped_wanted_ads", 0) }} wanted-ads),
             analyzed {{ run.counts.get("analyzed", 0) }}/{{ run.counts.get("scraped", 0) }}
+            {% if run.counts.get("knowledge_collected") %}
+            · collected knowledge for {{ run.counts.get("knowledge_collected") }} new model{{ "s" if run.counts.get("knowledge_collected") != 1 }}
+            {% endif %}
         </p>
     {% elif run.status == "done" %}
         <p>Done — analyzed {{ run.counts.get("analyzed", 0) }} listings.</p>

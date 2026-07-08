@@ -86,10 +86,53 @@ kleinanzeigen-agent/
 2. **Identify**: LLM call (`gemini-3.1-flash-lite`) maps title + attributes → canonical `VehicleIdentity` (brand, model, generation, engine code/displacement/power, trim). Stored and reused; identities are the join key to the knowledge base. Brand-agnostic: nothing model-specific in code.
 3. **Analyze** (per listing, one `gemini-3-flash-preview` call + local statistics):
    - **Condition**: LLM reads the description + attributes against a red-flag taxonomy (accident, rust, missing service history, short-term resale, vague wording, TÜV expired, "Bastlerfahrzeug", export-price signals…) → structured findings with severity.
-   - **Price**: vehicle condition is too heterogeneous for pure statistics to mean much (a low-mileage van with rust and no service history isn't comparable to a high-mileage one that's meticulously maintained), so pricing is **retrieval + LLM qualitative judgment**, not a percentile calculation. Retrieve the top N (~5–8) most similar listings from the DB by vehicle identity + mileage/year/power distance (relaxing identity match — e.g. same model/generation but different engine — if too few close matches exist, flagged as such), plus any forum-sourced price points for the same identity. Pass the target listing (attributes + condition-analysis summary from the previous step) and each comparable — annotated with deltas like "+15,000 km, 1 year older, similar condition, no major red flags" rather than raw numbers — to the LLM and ask it to reason about whether the asking price is fair *given the specific differences*, citing which comparables drove the judgment. Output: price verdict tier (underpriced/fair/overpriced/insufficient_data), an estimated fair range, reasoning text citing specific comparables, and confidence (low if <3 decent comparables exist or none share the same engine/trim).
+   - **Price**: vehicle condition is too heterogeneous for pure statistics to mean much (a low-mileage van with rust and no service history isn't comparable to a high-mileage one that's meticulously maintained), so pricing is **retrieval + LLM qualitative judgment**, not a percentile calculation. Retrieve the top N (~5–8) most similar listings from the DB by vehicle identity + mileage/year/power distance (relaxing identity match — e.g. same model/generation but different engine — if too few close matches exist, flagged as such), plus any forum-sourced price points for the same identity. Each comparable is annotated with human-readable deltas ("+15,000 km, 1 year older, …"). These annotated comparables (`pricing.py::format_comparables`) are handed to the **holistic judgment call** (see Scoring) rather than a standalone price-only LLM call — the model weighs price fairness against the ad's own condition and the comparable set together. If there are no comparables the price axis is stamped `no_data`.
    - **Reliability**: retrieve KB entries via **tiered fallback matching** — exact identity (same engine/trim) → same brand+model+generation → same brand+model — stopping at the first tier with hits, and recording which tier matched so confidence stays honest. This exists because identity extraction can fragment near-duplicate configs (observed live: "2.0 TDI 179 PS (CFCA)" vs "2.0 TDI 180 PS (CFCA biturbo)" from two ads rounding horsepower differently) — exact-only matching would make one ad's KB invisible to the other. If no tier has coverage → verdict explicitly says "no knowledge yet" and offers a one-click knowledge-collection run for that model.
-   - **Verdict**: weighted combination → overall score (e.g. 0–100), recommendation tier (buy-candidate / caution / avoid / insufficient data), and a plain-language reasoning summary.
+   - **Verdict**: see the Scoring section below.
 4. **Present**: dashboard lists analyzed listings sortable by score/price/mileage; detail page shows full breakdown with sources cited (which forum threads informed the reliability verdict).
+
+### Scoring — holistic LLM judgment (`app/analysis/judgment.py` + `verdict.py`)
+
+Reworked twice. The MVP's per-axis penalty formula was replaced (user decision) by **one
+holistic LLM call** that weighs everything together and returns the score itself, because
+hand-tuned constants read as "random formulas" and buried the qualitative reasoning the
+user actually wants. It keeps **"how good a buy" (score)** separate from **"how much we
+know" (confidence)**:
+
+- **`judgment.py::judge_listing`** — a single quality LLM call that receives all the
+  evidence at once (the ad's condition findings/positives, the annotated comparables, the
+  KB facts, and the deterministic reliability read) and returns:
+  - `overall_score` 0–100 + `recommendation` (≥70 buy_candidate · 45–69 caution · <45 avoid),
+  - a `good/fair/poor` rating + short note for each axis: price, condition, reliability,
+    positives (positives are `good/fair/none`, never "poor"),
+  - a plain-language `reasoning` paragraph a non-expert can act on.
+  The prompt is told that missing comparables/KB must lower *confidence*, not the score.
+- **`verdict.py::build_verdict`** — pure assembly around that call. It stamps each axis
+  `no_data` (overriding the LLM's rating) when the evidence genuinely doesn't exist — no
+  comparables → price `no_data`, no KB coverage → reliability `no_data` — so the UI can
+  tell a neutral "fair" from a real absence of evidence (`has_data` flag). Condition and
+  positives always have data (they're about this ad's own text).
+- **Confidence stays deterministic** (`_combined_confidence`): floored by the weaker of
+  price-data presence and KB match tier, so a fluent verdict over thin data still reads as
+  low confidence. Not the LLM's job.
+
+**Supporting structured signals still computed and persisted** (not a parallel headline
+score anymore):
+- **Structured condition + KB extraction** (`condition.py`, typed `KnowledgeEntry` rows):
+  kept for storage/listing/future price-comparison retrieval. Condition findings stay
+  listing-specific (ad red flags only) so model-general reliability doesn't double-count.
+- **Deterministic reliability read** (`app/analysis/reliability_score.py`): transparent,
+  symmetric rules over structured KB fields (`severity`, `onset_km`, `stance`, `sentiment`,
+  tier-scaled; `strength`/positive `overall_assessment` earn bonus so aging models aren't
+  ratcheted to "severe"). Now **one input to the judgment prompt** and the source of the
+  strengths/concerns evidence bullets on the detail page — no longer a separate scored
+  signal (the old `score_llm_variant` / two-signal dueling table is gone).
+
+The verdict is stored in `Analysis` (`overall_score`, `tier`, `confidence`,
+`reasoning_text`; `score_breakdown` holds the per-axis rating/note/has_data; `reliability`
+holds the deterministic read + KB entry ids). UI: dashboard shows colored per-axis rating
+chips + muted score; detail page leads with a verdict card, four colored axis cards, and
+the reasoning, then the condition/KB evidence sections.
 
 ### Knowledge builder (separate, capped, on-demand job)
 
@@ -141,7 +184,7 @@ kleinanzeigen-agent/
 8. ✅ Condition analysis: red-flag taxonomy + prompt → structured findings (`app/analysis/condition.py`). Verified live on 6 real listings incl. a "zum schlachten" (for parts) ad and a "Beschädigtes Fahrzeug"-flagged camper — findings correctly caught the parts-car framing, a description/attribute contradiction, a known T5 180PS BiTDI EGR-cooler oil-consumption risk, and an implausible future-dated repair.
 9. ✅ Comparables retrieval (`app/analysis/comparables.py`): nearest-N query, tiered exact_identity → same_generation → same_model fallback, sorted by mileage/year/power distance within a tier. Verified: 6 unit tests on synthetic listings (all three tiers, price-exclusion, target-count cap) + live run over 15 real identified T5 listings showing all three tiers firing correctly.
 9b. ✅ Price analysis (qualitative, `app/analysis/pricing.py`): builds the comparison prompt (target + condition summary + annotated deltas per comparable + optional forum price points) → LLM verdict tier + fair range + reasoning + confidence; skips the LLM call entirely (returns `insufficient_data`) when there's nothing to compare against. Verified: 3 unit tests + live run — reasoning correctly cited the specific exact-match comparable and factored in the condition-analysis caveats (high mileage, replacement-engine history) rather than just echoing the comparable's price.
-10. ✅ Verdict combiner (`app/analysis/verdict.py`): deterministic (not a 4th LLM call) — price-tier base score adjusted by condition-finding severities and positive signals, tier thresholds, confidence floored by the weaker of price-confidence/reliability-coverage. `run_full_analysis` orchestrates identity→condition→comparables→price→reliability→persist as one `Analysis` row. Verified: 6 unit tests (pure `combine_verdict` + orchestrator with a fake provider) + live 3-listing run — scores sensibly differentiated a clean dealer listing (70, buy_candidate) from a risky engine-swap van (19, avoid) and a comparable-priced high-mileage one (51, caution, high confidence from an exact-identity comparable).
+10. ✅ Verdict combiner (`app/analysis/verdict.py`): `run_full_analysis` orchestrates identity→condition→comparables→judgment→persist as one `Analysis` row, with deterministic confidence floored by the weaker of price-data/KB-coverage. *(The original additive combiner here was replaced by the holistic LLM judgment in Milestone H; orchestration + deterministic confidence carried forward.)*
 
 **Milestone D — Web UI** — ✅ done
 11. ✅ Search-run flow: form (URL + max count, capped) → `SearchRun` row + FastAPI BackgroundTasks job (`app/jobs.py`) → htmx-polled progress fragment (scraped/analyzed counters, HX-Refresh on completion) → dashboard table sorted by score/price/mileage with tier badges. Verified: driven live in headless Chromium — form submit, progress updates through all stages, 3 analyzed rows, all sort orders, zero console errors. (Browser-driving caught a real bug: the status fragment read `run` while the dashboard passed `active_run` — fixed.)
@@ -160,6 +203,20 @@ kleinanzeigen-agent/
 ### Bonus beyond original plan (built during implementation)
 - Re-analyze route + job (`execute_reanalyze`) and a "knowledge is newer" banner, so collecting knowledge after a listing was analyzed isn't a dead end.
 - Progressive, bilingual knowledge collection (see Milestone E) — a genuine improvement over the fixed-query sketch.
+
+**Milestone G — Scoring rework (post-MVP, ✅ but ⚠️ mostly superseded by Milestone H)** — reliability into the score + score-logic reevaluation from MVP learnings. The additive-formula scoring (19, 20, 23) was later replaced by the holistic LLM judgment; the KB enrichment (20's structured fields, 21, 22) carried forward:
+19. ✅ Neutral-baseline additive score replacing the price-tier-based one: `70 + price ± + condition ± − reliability_net`. Price data-thinness (`insufficient_data`, `underpriced`) made score-neutral — thin data lowers *confidence*, not the score (fixes early-DB "everything drifts to caution").
+20. ✅ Two reliability signals side by side (user decision): deterministic rules over enriched KB fields (`severity`/`onset_km`/`stance`/`sentiment`, tier-scaled, uses the listing's own mileage vs. fault onset) drive the score; the LLM's own risk read is computed in parallel as `score_llm_variant` for comparison. Condition prompt narrowed to listing-specific red flags to avoid double-counting model-general reliability.
+21. ✅ Symmetric positive knowledge (user decision): new `strength` + `overall_assessment` (sentiment) entry types, balanced research angles (incl. `overall_reputation`) and extraction prompt guidance, and bonus points that offset problem penalties — counters the negativity bias where every aging model ratchets to "severe" just because breakage reports accumulate.
+22. ✅ Auto-collect on first encounter: search runs give never-researched identities a first knowledge pass before their first verdict (budgeted: `auto_collect_max_identities_per_run`/`auto_collect_max_queries`, fail-soft on grounding errors; progress fragment shows the stage).
+23. ✅ Sub-score UI (user decision): dashboard shows per-factor contribution columns (Price ± / Condition ± / Reliability ± / LLM rel. ±) with the summed score de-emphasized as a muted sort key; detail page leads with the breakdown table; re-analyze banner moved to a prominent position at the top of the page. *(Superseded by H — the signed ± columns became colored rating chips.)*
+
+**Milestone H — Holistic LLM verdict (post-MVP, all ✅)** — user decision: rely on the LLM's overall judgment over evidence rather than hand-tuned per-axis formulas, and show one quantitative + qualitative verdict:
+24. ✅ Holistic judgment call (`app/analysis/judgment.py`): one quality LLM call receives condition findings, annotated comparables (`pricing.py::format_comparables`, extracted from the old standalone price call), KB facts and the deterministic reliability read, and returns the score, recommendation, and a `good/fair/poor` rating + note per axis (price/condition/reliability/positives) plus plain-language reasoning. The separate baseline-additive scorer and the standalone price LLM call are gone.
+25. ✅ `no_data` distinction (user decision): the LLM only rates good/fair/poor; `verdict.py::build_verdict` overrides an axis to `no_data`/`has_data=False` when evidence is genuinely absent (no comparables → price; no KB → reliability), so the UI shows grey "No data" vs. a neutral rating. Condition/positives always have data.
+26. ✅ Structured extraction retained: `condition.py` still returns typed findings/positives and the KB keeps typed entries (for storage + future price-comparison retrieval), even though the verdict is the holistic call. `ReliabilityAssessment` dropped from the condition call — reliability now lives on the judgment call + deterministic KB read.
+27. ✅ Confidence stays deterministic (user decision): `_combined_confidence`, floored by the weaker of price-data presence and KB match tier.
+28. ✅ UI: dashboard per-axis colored rating chips (price/condition/reliability) + muted score; detail page a verdict card, four colored axis cards, holistic reasoning, then condition/KB evidence sections. Baseline/sum breakdown table and the two-reliability-signal dueling table removed. Verified live end-to-end: a re-analyzed T5 rendered "avoid · score 30/100 · confidence: low" with Price = grey "No data" (note explains the cheap price isn't a bargain), Condition/Reliability = red "Poor", no console errors.
 
 ## Verification (overall)
 

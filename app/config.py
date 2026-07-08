@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     # Knowledge builder cap: research queries per identity per collection run. Each query
     # is one grounded call + one extraction call, so this bounds free-tier quota spend.
     knowledge_default_max_queries: int = 2
+    # Auto-collect a first knowledge pass when a search run surfaces an identity with an
+    # empty KB, so the very first verdict already has reliability data. Budgeted per run.
+    auto_collect_enabled: bool = True
+    auto_collect_max_identities_per_run: int = 3
+    auto_collect_max_queries: int = 2
 
     comparables_target_count: int = 8
 

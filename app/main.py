@@ -24,6 +24,7 @@ app = FastAPI(title="Kleinanzeigen Van-Buying Agent")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "app" / "web" / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "app" / "web" / "templates")
 
+
 _SORT_KEYS = {
     "score": lambda row: -(row["analysis"].overall_score or 0),
     "price": lambda row: row["listing"].price_eur if row["listing"].price_eur is not None else float("inf"),
