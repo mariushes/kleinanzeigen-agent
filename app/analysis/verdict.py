@@ -1,11 +1,10 @@
-"""Orchestrates a listing's full analysis into one persisted `Analysis` row.
+"""Pure verdict assembly: turn the holistic LLM judgment + evidence presence into the
+persisted `Analysis` shape. No DB, no LLM — the orchestration that calls the LLM lives in
+`pipeline.py`; this module is just scoring so it stays trivially testable.
 
-The verdict itself is the holistic LLM call (`judgment.py`): it weighs price, condition,
-positive signals and reliability together and returns the score, recommendation and
-per-axis ratings. This module wires the evidence together, keeps the structured condition
-and knowledge extraction (persisted for storage/retrieval), computes the *deterministic*
-confidence label, and stamps `has_price_data` / `has_reliability_data` so the UI can tell
-a neutral "fair" from a genuine absence of evidence.
+The verdict itself is the holistic LLM call (`judgment.py`). Here we compute the
+*deterministic* confidence label and stamp each axis `no_data` when evidence is genuinely
+absent, so the UI can tell a neutral "fair" from an absence of evidence.
 
 Confidence is deliberately not the LLM's job (user decision): it's a mechanical function
 of how much evidence we actually had — price comparables present, and how well the KB
@@ -16,17 +15,11 @@ confidence.
 from typing import Literal
 
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
 
-from app.analysis.comparables import ComparablesResult, find_comparables
-from app.analysis.condition import ConditionAnalysis, analyze_condition
-from app.analysis.judgment import Judgment, judge_listing
-from app.analysis.reliability_score import ReliabilityRisk, assess_reliability_risk
-from app.config import get_settings
-from app.db.models import Analysis, Listing
-from app.knowledge.retrieval import ReliabilitySummary, get_reliability_summary
-from app.llm.provider import LLMProvider
-from app.vehicles.identity import get_or_create_identity
+from app.analysis.comparables import ComparablesResult
+from app.analysis.judgment import Judgment
+from app.analysis.reliability_score import ReliabilityRisk
+from app.knowledge.retrieval import ReliabilitySummary
 
 _RANK_CONFIDENCE = {0: "low", 1: "medium", 2: "high"}
 _RELIABILITY_TIER_CONFIDENCE = {"exact_identity": 2, "same_generation": 2, "same_model": 1, None: 0}
@@ -38,7 +31,7 @@ class VerdictResult(BaseModel):
     confidence: Literal["low", "medium", "high"]
     reasoning: str
     reliability: dict
-    score_breakdown: dict
+    verdict_axes: dict
 
 
 def _combined_confidence(
@@ -88,7 +81,7 @@ def build_verdict(
                 "has_unrated_entries": det_risk.has_unrated_entries,
             },
         },
-        score_breakdown={
+        verdict_axes={
             "overall_score": judgment.overall_score,
             "price": axis(judgment.price, has_price_data),
             # Condition is always about this ad's own text, so it always has data.
@@ -97,35 +90,3 @@ def build_verdict(
             "positives": axis(judgment.positives, True),
         },
     )
-
-
-def run_full_analysis(db: Session, provider: LLMProvider, listing: Listing) -> Analysis:
-    settings = get_settings()
-
-    if listing.identity_id is None:
-        get_or_create_identity(db, provider, listing)
-
-    reliability = get_reliability_summary(db, listing.identity)
-    det_risk = assess_reliability_risk(reliability.entries, reliability.tier, listing.mileage_km)
-
-    condition = analyze_condition(db, provider, listing)
-    comparables = find_comparables(db, listing)
-    judgment = judge_listing(db, provider, listing, condition, comparables, reliability, det_risk)
-
-    verdict = build_verdict(judgment, comparables, reliability, det_risk)
-
-    analysis = Analysis(
-        listing_id=listing.id,
-        condition=condition.model_dump(),
-        price=judgment.price.model_dump(),
-        reliability=verdict.reliability,
-        score_breakdown=verdict.score_breakdown,
-        overall_score=verdict.overall_score,
-        tier=verdict.tier,
-        reasoning_text=verdict.reasoning,
-        confidence=verdict.confidence,
-        llm_model=settings.llm_model_quality,
-    )
-    db.add(analysis)
-    db.commit()
-    return analysis

@@ -25,10 +25,6 @@ class Settings(BaseSettings):
     # We throttle client-side to this interval rather than burning through the daily quota on 429 retries.
     llm_min_call_interval_seconds: float = 6.5
 
-    reddit_client_id: str = ""
-    reddit_client_secret: str = ""
-    reddit_user_agent: str = "macos:kleinanzeigen-agent:0.1 (personal van research tool)"
-
     kleinanzeigen_api_base_url: str = "http://127.0.0.1:8000"
     kleinanzeigen_api_timeout_seconds: float = 30.0
 

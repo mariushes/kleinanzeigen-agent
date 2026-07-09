@@ -27,13 +27,15 @@ search URL ──▶ ebay-kleinanzeigen-api sidecar (Playwright) ──▶ Listi
                         ▼                                            ▼
              vehicle identity (LLM)                       condition analysis (LLM)
                         │                                            │
-                        ▼                                            ▼
-             reliability KB  ◀──── grounded web research    qualitative price analysis
-             (per identity)        (Gemini google_search)   (LLM over comparables)
-                        │                                            │
-                        └────────────────────┬───────────────────────┘
-                                             ▼
-                                    combined verdict + score
+                        ▼                                            │
+             reliability KB  ◀──── grounded web research            │
+             (per identity)        (Gemini google_search)           │
+                        │              comparables (DB, w/ deltas)   │
+                        └──────────────────────┬─────────────────────┘
+                                               ▼
+                              holistic judgment (one LLM call): weighs
+                              price · condition · reliability · positives
+                              → score + per-axis ratings + reasoning
 ```
 
 - **Scraping** is delegated to the vendored [`ebay-kleinanzeigen-api`](https://github.com/DanielWTE/ebay-kleinanzeigen-api)
@@ -95,7 +97,7 @@ All in [`app/config.py`](app/config.py) (overridable via `.env`). Notable knobs:
 |---|---|---|
 | `default_max_listings` / `max_listings_hard_cap` | 10 / 50 | scrape caps |
 | `llm_model_fast` | `gemini-3.1-flash-lite` | identity + extraction |
-| `llm_model_quality` | `gemini-3.1-flash-lite` | condition + price (see note) |
+| `llm_model_quality` | `gemini-3.1-flash-lite` | condition + holistic verdict (see note) |
 | `llm_model_grounded` | `gemini-2.5-flash` | web-search research (only tier with free grounding quota) |
 | `llm_min_call_interval_seconds` | 6.5 | client-side throttle for the free-tier RPM cap |
 | `knowledge_default_max_queries` | 2 | research angles per collection run |
@@ -115,3 +117,16 @@ uv run alembic upgrade head
 Tests are offline-first: scrapers run against fixtures and LLM calls are faked, so the
 suite needs neither the sidecar nor an API key. Only manual/smoke runs hit the real
 services.
+
+### Project layout
+
+- `app/web/routes/` — one `APIRouter` per concern (dashboard, listings, runs, knowledge);
+  `app/main.py` only assembles them.
+- `app/services/` — HTTP/template-agnostic read functions (session in, plain data out).
+  Put query/shaping logic here, not in a route, so it can be reused.
+- `app/analysis/` — `pipeline.py` orchestrates a listing's analysis (DB + LLM) into one
+  `Analysis` row; `verdict.py` is the pure scoring step; `judgment.py` is the single
+  holistic LLM verdict call; `condition.py`, `comparables.py`, `reliability_score.py`,
+  and `pricing.py` prepare its inputs.
+- `app/knowledge/` — the reliability KB: `sources/` (grounded web research behind a
+  `KnowledgeSource` protocol), `builder.py`, `extraction.py`, `retrieval.py`.

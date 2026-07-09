@@ -31,7 +31,7 @@
     </thead>
     <tbody>
         {% for row in rows %}
-        {% set b = row.analysis.score_breakdown or {} %}
+        {% set b = row.analysis.verdict_axes or {} %}
         <tr>
             <td><a href="/listings/{{ row.listing.id }}">{{ row.listing.title }}</a></td>
             <td>{{ row.listing.price_eur }} €</td>

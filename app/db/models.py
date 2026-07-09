@@ -22,7 +22,6 @@ class VehicleIdentity(Base):
     generation: Mapped[str | None] = mapped_column(String(32), nullable=True)
     engine_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
     displacement_l: Mapped[float | None] = mapped_column(Float, nullable=True)
-    power_kw: Mapped[int | None] = mapped_column(Integer, nullable=True)
     fuel: Mapped[str | None] = mapped_column(String(32), nullable=True)
     trim: Mapped[str | None] = mapped_column(String(64), nullable=True)
     canonical_label: Mapped[str] = mapped_column(String(255))
@@ -69,7 +68,10 @@ class Analysis(Base):
     condition: Mapped[dict] = mapped_column(JSON, default=dict)
     price: Mapped[dict] = mapped_column(JSON, default=dict)
     reliability: Mapped[dict] = mapped_column(JSON, default=dict)
-    score_breakdown: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Per-axis verdict: {overall_score, price/condition/reliability/positives:
+    # {rating, note, has_data}}. Named after the Milestone-H holistic rework — it's the
+    # verdict's axes, not a breakdown of an additive score (the old additive scorer is gone).
+    verdict_axes: Mapped[dict] = mapped_column(JSON, default=dict)
 
     overall_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tier: Mapped[str | None] = mapped_column(String(32), nullable=True)

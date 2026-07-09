@@ -8,7 +8,7 @@ scheduled it.
 
 from datetime import datetime, timezone
 
-from app.analysis.verdict import run_full_analysis
+from app.analysis.pipeline import run_full_analysis
 from app.config import get_settings
 from app.db.models import KnowledgeEntry, KnowledgeResearchRun, Listing, SearchRun, VehicleIdentity
 from app.db.session import SessionLocal
