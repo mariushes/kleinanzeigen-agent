@@ -5,7 +5,8 @@ from app.analysis.comparables import Comparable, ComparablesResult
 from app.analysis.condition import ConditionAnalysis, ConditionFinding
 from app.analysis.judgment import AxisRating, Judgment
 from app.analysis.reliability_score import ReliabilityRisk
-from app.analysis.verdict import build_verdict, run_full_analysis
+from app.analysis.pipeline import run_full_analysis
+from app.analysis.verdict import build_verdict
 from app.db.models import Analysis, Base, KnowledgeEntry, Listing, VehicleIdentity
 from app.knowledge.retrieval import ReliabilitySummary
 from app.llm.provider import LLMCallResult
@@ -53,7 +54,7 @@ def test_score_and_recommendation_come_straight_from_the_judgment():
 def test_axes_marked_no_data_when_evidence_absent():
     # No comparables and empty KB → price and reliability read "no_data", not their LLM rating.
     verdict = build_verdict(a_judgment(), ComparablesResult(), ReliabilitySummary(), no_det_risk())
-    b = verdict.score_breakdown
+    b = verdict.verdict_axes
     assert b["price"]["rating"] == "no_data"
     assert b["price"]["has_data"] is False
     assert b["reliability"]["rating"] == "no_data"
@@ -70,7 +71,7 @@ def test_axes_keep_llm_rating_when_evidence_present():
         tier="exact_identity",
     )
     verdict = build_verdict(a_judgment(), a_comparable(db), reliability, no_det_risk())
-    b = verdict.score_breakdown
+    b = verdict.verdict_axes
     assert b["price"]["rating"] == "fair"
     assert b["price"]["has_data"] is True
     assert b["reliability"]["rating"] == "good"
@@ -140,7 +141,7 @@ def test_run_full_analysis_persists_row_sets_identity_and_breakdown():
     assert analysis.confidence in {"low", "medium", "high"}
     assert analysis.overall_score == 72
     # No comparables yet → price axis reads no_data.
-    assert analysis.score_breakdown["price"]["rating"] == "no_data"
+    assert analysis.verdict_axes["price"]["rating"] == "no_data"
     assert analysis.reliability["deterministic"]["level"] == "none"  # empty KB
 
 
@@ -169,4 +170,4 @@ def test_run_full_analysis_deterministic_reliability_from_kb():
     # Deterministic read (catastrophic + past onset, exact tier → severe) is preserved as evidence.
     assert analysis.reliability["deterministic"]["level"] == "severe"
     # KB coverage exists → reliability axis carries the LLM rating, not no_data.
-    assert analysis.score_breakdown["reliability"]["has_data"] is True
+    assert analysis.verdict_axes["reliability"]["has_data"] is True

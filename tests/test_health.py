@@ -114,7 +114,7 @@ def test_listing_detail_renders_analysis_sections(db_session):
             },
             overall_score=62, tier="caution", confidence="low",
             reasoning_text="Overall: some rust, price fair.",
-            score_breakdown={
+            verdict_axes={
                 "overall_score": 62,
                 "price": {"rating": "no_data", "note": "No comparables yet.", "has_data": False},
                 "condition": {"rating": "fair", "note": "Some rust.", "has_data": True},
