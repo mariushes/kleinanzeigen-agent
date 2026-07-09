@@ -37,12 +37,19 @@ cd vendor/ebay-kleinanzeigen-api && uv run uvicorn main:app --port 8000
 - **Brand-agnostic code, narrow data**: nothing in `app/` should hardcode a specific
   brand/model (e.g. "T5"). Model-specific knowledge lives only in the `knowledge_entries`
   table and is extended by running the knowledge builder, not by adding code branches.
-- **LLMProvider/KnowledgeSource are protocols**: LLM calls and forum/Reddit sources are
-  each behind a small `Protocol` interface (see `app/llm/provider.py`,
+- **LLMProvider/KnowledgeSource are protocols**: LLM calls and web/forum research sources
+  are each behind a small `Protocol` interface (see `app/llm/provider.py`,
   `app/knowledge/sources/`) so implementations can be swapped without touching callers.
   Kleinanzeigen access itself is not behind a protocol — it's a single client
   (`app/scraping/kleinanzeigen.py`) against the vendored sidecar (see below); there's
   only one implementation and no reason to abstract it further.
+- **Web layer is thin; logic lives in services**: routes are one `APIRouter` per concern
+  in `app/web/routes/` (`main.py` is app-assembly only), and they stay thin — DB reads go
+  through `app/services/{listings,knowledge}.py`, which are HTTP/template-agnostic
+  (session in, plain data out). Put query/shaping logic in a service, not a route, so the
+  same function can back both a page and (later) a chat tool. Analysis follows the same
+  split: `verdict.py` is pure scoring (`build_verdict`, no DB/LLM), `pipeline.py` is the
+  DB/LLM orchestration (`run_full_analysis`).
 - **Every LLM call is logged**: after calling `provider.structured_completion(...)`, pass
   the result to `app/llm/logging.py::record_llm_call` — this is how per-run token usage
   stays visible in the UI.
@@ -63,7 +70,8 @@ cd vendor/ebay-kleinanzeigen-api && uv run uvicorn main:app --port 8000
   is `WebSearchSource` (Gemini `google_search` grounding). Grounding has free-tier quota
   **only on `gemini-2.5-flash`** (`llm_model_grounded`); 3.x models 429 grounded calls
   regardless of remaining quota — don't switch the grounded model to a 3.x id.
-  `RedditSource` stays wired to the same protocol but dormant until credentials exist.
+  A Reddit source was removed (needed OAuth credentials that don't exist); if you re-add
+  one, it goes behind the same `KnowledgeSource` protocol in `app/knowledge/sources/`.
 - **Research and extraction are always two calls**: Gemini rejects combining `tools`
   (search) with `response_schema` (structured JSON) in one call. The grounded research
   call returns free-form text + citations; a separate structured call extracts typed

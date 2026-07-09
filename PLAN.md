@@ -45,7 +45,7 @@ Models per task (tunable in config): `gemini-3.1-flash-lite` for listing parsing
 ```
 kleinanzeigen-agent/
 ├── app/
-│   ├── main.py                # FastAPI app, routes
+│   ├── main.py                # FastAPI app assembly only (mounts routers)
 │   ├── config.py              # Pydantic settings (API keys, model choices, rate limits)
 │   ├── db/
 │   │   ├── models.py          # SQLAlchemy models
@@ -56,21 +56,27 @@ kleinanzeigen-agent/
 │   ├── llm/
 │   │   ├── provider.py        # LLMProvider protocol + LLMCallResult (structured-output call)
 │   │   ├── gemini.py          # Gemini implementation (google-genai), client-side free-tier throttling
-│   │   ├── logging.py         # record_llm_call: persists LLMCallResult into llm_calls
-│   │   └── prompts/           # one module per prompt, versioned
+│   │   └── logging.py         # record_llm_call: persists LLMCallResult into llm_calls
 │   ├── vehicles/
 │   │   └── identity.py        # canonical vehicle identity extraction (LLM-assisted)
 │   ├── knowledge/
-│   │   ├── sources/           # reddit.py (public .json), forums.py (HTML)
-│   │   ├── builder.py         # capped knowledge-collection job
-│   │   └── retrieval.py       # KB summary for a given vehicle identity
+│   │   ├── sources/           # KnowledgeSource protocol + web_search.py (Gemini grounding, the active source)
+│   │   ├── extraction.py      # grounded research text → typed KnowledgeEntry rows
+│   │   ├── builder.py         # capped, progressive knowledge-collection job
+│   │   └── retrieval.py       # tiered KB summary for a given vehicle identity
 │   ├── analysis/
 │   │   ├── comparables.py     # similarity retrieval: nearest-N by identity/mileage/year/power, with relaxed-match fallback
-│   │   ├── pricing.py         # builds the qualitative price-comparison prompt from target + comparables (DB + forum), parses LLM verdict
-│   │   ├── condition.py       # LLM condition/red-flag analysis
-│   │   └── verdict.py         # combine into overall verdict + confidence
-│   ├── jobs.py                # in-process background job runner (asyncio task + status table)
+│   │   ├── pricing.py         # formats retrieved comparables (with deltas) for the judgment prompt
+│   │   ├── condition.py       # LLM condition/red-flag analysis (this ad only)
+│   │   ├── reliability_score.py # deterministic model-reliability read from structured KB fields
+│   │   ├── judgment.py        # the holistic LLM verdict call (price/condition/reliability/positives)
+│   │   ├── verdict.py         # pure build_verdict: judgment + evidence-presence → persisted shape
+│   │   └── pipeline.py        # run_full_analysis: DB/LLM orchestration → one Analysis row
+│   ├── services/              # HTTP/template-agnostic read functions (listings.py, knowledge.py)
+│   ├── jobs.py                # in-process background job runner (FastAPI BackgroundTasks)
 │   └── web/
+│       ├── routes/            # one APIRouter per concern (dashboard, listings, runs, knowledge)
+│       ├── templating.py      # shared Jinja2 templates instance
 │       ├── templates/         # Jinja2: dashboard, listing detail, knowledge admin
 │       └── static/
 ├── tests/
@@ -129,7 +135,7 @@ score anymore):
   signal (the old `score_llm_variant` / two-signal dueling table is gone).
 
 The verdict is stored in `Analysis` (`overall_score`, `tier`, `confidence`,
-`reasoning_text`; `score_breakdown` holds the per-axis rating/note/has_data; `reliability`
+`reasoning_text`; `verdict_axes` holds the per-axis rating/note/has_data; `reliability`
 holds the deterministic read + KB entry ids). UI: dashboard shows colored per-axis rating
 chips + muted score; detail page leads with a verdict card, four colored axis cards, and
 the reasoning, then the condition/KB evidence sections.
@@ -217,6 +223,13 @@ the reasoning, then the condition/KB evidence sections.
 26. ✅ Structured extraction retained: `condition.py` still returns typed findings/positives and the KB keeps typed entries (for storage + future price-comparison retrieval), even though the verdict is the holistic call. `ReliabilityAssessment` dropped from the condition call — reliability now lives on the judgment call + deterministic KB read.
 27. ✅ Confidence stays deterministic (user decision): `_combined_confidence`, floored by the weaker of price-data presence and KB match tier.
 28. ✅ UI: dashboard per-axis colored rating chips (price/condition/reliability) + muted score; detail page a verdict card, four colored axis cards, holistic reasoning, then condition/KB evidence sections. Baseline/sum breakdown table and the two-reliability-signal dueling table removed. Verified live end-to-end: a re-analyzed T5 rendered "avoid · score 30/100 · confidence: low" with Price = grey "No data" (note explains the cheap price isn't a bargain), Condition/Reliability = red "Poor", no console errors.
+
+**Milestone I — Cleanup & refactor for maintainability + chat readiness (post-MVP, all ✅)** — leaner code and a service/router structure the planned chat interface (Phase 2) can build on; behavior-preserving:
+29. ✅ Dead-code + dependency removal: deleted the empty `app/llm/prompts/` package; removed the dormant Reddit source (needed OAuth credentials that don't exist) + its test + `reddit_*` config; dropped `praw` (Reddit-only) and `selectolax` (unused — scraping is the sidecar HTTP client) from dependencies.
+30. ✅ Dropped the never-populated `VehicleIdentity.power_kw` column (migration `50f9532be7ea`); the listing-level `attributes["power_kw"]` used by comparables retrieval is unaffected.
+31. ✅ Split `main.py` into one `APIRouter` per concern (`app/web/routes/{dashboard,listings,runs,knowledge}.py`); `main.py` is now app-assembly only, shared templates in `app/web/templating.py`.
+32. ✅ Extracted `app/services/{listings,knowledge}.py` — HTTP/template-agnostic read functions (session in, plain data out) that back the routes now and are intended to back the chat agent's tools in Phase 2.
+33. ✅ Split `verdict.py` (pure `build_verdict` scoring, no DB/LLM) from `pipeline.py` (`run_full_analysis` orchestration); renamed `Analysis.score_breakdown` → `verdict_axes` (migration `e19c46bd2fd0`, in-place ALTER preserving existing verdicts) since it's no longer a breakdown of an additive score. ✓ verify: 80 tests green; all pages served 200 live against the dev DB with correct content; token spend unchanged (no new LLM calls).
 
 ## Verification (overall)
 
