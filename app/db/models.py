@@ -22,7 +22,6 @@ class VehicleIdentity(Base):
     generation: Mapped[str | None] = mapped_column(String(32), nullable=True)
     engine_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
     displacement_l: Mapped[float | None] = mapped_column(Float, nullable=True)
-    power_kw: Mapped[int | None] = mapped_column(Integer, nullable=True)
     fuel: Mapped[str | None] = mapped_column(String(32), nullable=True)
     trim: Mapped[str | None] = mapped_column(String(64), nullable=True)
     canonical_label: Mapped[str] = mapped_column(String(255))
