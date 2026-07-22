@@ -4,11 +4,28 @@ Brand-agnostic by design: nothing here hardcodes "VW" or "T5" — the LLM does t
 normalization using its own knowledge of vehicle brands/models/engine variants, for
 whatever brand/model shows up in the listing.
 
-Deliberately excludes precise numeric power/displacement from the identity-matching key
-(`canonical_label`): rounding PS→kW during scraping can wobble by a kW between two
-listings of the exact same real-world configuration, which would fragment the knowledge
-base into near-duplicate identities. Numeric power/fuel are kept for comparables
-distance calculations (on `Listing.attributes`), not for identity dedup.
+The `canonical_label` is a MATCHING KEY, not a display string: two ads for the same
+real-world vehicle must produce the same label, or their shared reliability knowledge is
+split across two identities. Everything unstable is therefore kept out of it:
+
+- **Numeric power/displacement**: rounding PS→kW during scraping wobbles by a kW between
+  identical vehicles. Kept on `Listing.attributes` for comparables distance, not for dedup.
+- **The power figure inside the engine string**: the same engine is advertised as
+  "1.9 TDI 102 PS" and "1.9 TDI 105 PS", so the key uses `engine_family` ("1.9 TDI"),
+  which the LLM derives. Deliberately *not* a regex — a pattern list like `tdi|tsi|cdi`
+  is one brand's naming convention masquerading as a general rule, and would silently
+  mangle BMW/Ford/Tesla engines. The full `engine_code` is kept on the row for display.
+- **Trim**: varies with how much the seller wrote, and describes equipment rather than
+  the mechanical configuration reliability knowledge is about.
+
+The `model`/`generation` boundary is pinned in the prompt with worked examples, because
+the LLM previously split the same vehicle two ways — model "Transporter" + generation
+"T5" vs. model "T5 Transporter" — which fragmented the KB and defeated even the
+`same_model` retrieval tier.
+
+*Idea if `engine_family` proves inconsistent across calls (not implemented):* pass the
+distinct `engine_family` values already stored for that brand as few-shot examples in the
+prompt, so the model reuses an existing key instead of inventing a new spelling.
 """
 
 import re
@@ -28,18 +45,41 @@ identity. Classified titles are often keyword-stuffed for search (e.g. dealer sp
 mentioning multiple unrelated models) — extract the identity of the actual vehicle \
 being sold, not every keyword in the title.
 
+These fields are a MATCHING KEY: two ads for the same real-world vehicle must produce \
+the same values, or their shared knowledge gets split in two. Put each piece of \
+information in the same field every time.
+
 Rules:
 - Use the official manufacturer brand name (e.g. "Volkswagen", not "VW").
-- `model` is the model line as the manufacturer names it (e.g. "T5 Multivan", "Golf").
-- `generation` is only the generation/facelift code if explicitly identifiable (e.g. \
-"T5.1", "Mk7"). Leave it null if not clearly determinable — do not guess from the year.
-- `engine_code` should describe the engine/power variant using standard terminology \
-you know for this model, e.g. "2.0 TDI 180 PS (CFCA biturbo)". Leave null if you cannot \
-identify it confidently from the given data.
+- `model` is the full model line as the manufacturer names it, INCLUDING the series \
+designation when that is part of the name: "T5 Transporter", "T6 Multivan", "Golf", \
+"Sprinter". Do NOT strip the series out into `generation` — "Transporter" with \
+generation "T5" is WRONG; it must be model "T5 Transporter". If an ad names only the \
+series ("T5") and the body style is clear from the data, still produce the combined \
+form ("T5 Transporter", "T5 Multivan").
+- `generation` is ONLY a facelift/sub-generation marker *within* that model line, e.g. \
+"T5.1", "Mk7.5". It is almost always null. Never put the series designation here if it \
+already belongs in `model`, and never guess it from the year.
+- `engine_code` describes the engine variant using standard terminology for this model, \
+e.g. "2.0 TDI 180 PS (CFCA biturbo)". Leave null if you cannot identify it confidently \
+from the given data — a wrong guess is worse than null, because null correctly means \
+"this ad didn't say" and is handled as such.
+- `engine_family` is the SAME engine without the power figure or internal code — the \
+designation the manufacturer uses to name the engine variant itself, in whatever \
+convention applies to that brand: "1.9 TDI", "2.0 TDI", "320d", "1.5 EcoBoost", \
+"Long Range". This is the matching key, so be consistent: the same real engine \
+advertised as "1.9 TDI 102 PS" in one ad and "1.9 TDI 105 PS" in another must give \
+`engine_family` "1.9 TDI" both times. Null whenever `engine_code` is null.
 - `trim` is the trim/spec level if named (e.g. "Highline", "Match", "Comfortline"). \
 Leave null if not stated.
 - `displacement_l` and `fuel` are informational best-effort extractions, not used for \
 matching — null is fine if unclear.
+
+Worked examples:
+- "VW T5 Transporter Kombi 1.9 TDI 102 PS" -> brand "Volkswagen", model \
+"T5 Transporter", generation null, engine_code "1.9 TDI 102 PS", engine_family "1.9 TDI".
+- "VW T5 Transporter lang, top gepflegt" (no engine stated) -> brand "Volkswagen", \
+model "T5 Transporter", generation null, engine_code null, engine_family null.
 """
 
 
@@ -48,6 +88,9 @@ class ExtractedIdentity(BaseModel):
     model: str
     generation: str | None = None
     engine_code: str | None = None
+    # Coarse engine designation without the power figure — the part of the engine that
+    # goes into the matching key. See the prompt's rules and `build_canonical_label`.
+    engine_family: str | None = None
     trim: str | None = None
     displacement_l: float | None = None
     fuel: str | None = None
@@ -61,16 +104,22 @@ def build_canonical_label(
     brand: str,
     model: str,
     generation: str | None,
-    engine_code: str | None,
-    trim: str | None,
+    engine_family: str | None,
+    trim: str | None = None,
 ) -> str:
+    """The identity/matching key: only the stable parts of the extraction.
+
+    `engine_family` (not `engine_code`) is used, so the same engine advertised with
+    slightly different power figures collapses to one identity. `trim` is accepted for
+    call compatibility but deliberately ignored — it varies with how much the seller
+    chose to write and describes equipment, not the mechanical configuration that
+    reliability knowledge is about.
+    """
     parts = [_normalize(brand), _normalize(model)]
     if generation:
         parts.append(_normalize(generation))
-    if trim:
-        parts.append(_normalize(trim))
-    if engine_code:
-        parts.append(_normalize(engine_code))
+    if engine_family:
+        parts.append(_normalize(engine_family))
     return " | ".join(parts)
 
 
@@ -100,7 +149,7 @@ def get_or_create_identity(
     extracted: ExtractedIdentity = result.parsed
 
     canonical_label = build_canonical_label(
-        extracted.brand, extracted.model, extracted.generation, extracted.engine_code, extracted.trim
+        extracted.brand, extracted.model, extracted.generation, extracted.engine_family
     )
 
     # Case-insensitive: the LLM isn't perfectly consistent about casing across calls

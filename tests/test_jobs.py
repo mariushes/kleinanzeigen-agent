@@ -240,3 +240,147 @@ def test_auto_collect_skips_identity_with_existing_entries(tmp_path):
 
     attempted = _maybe_auto_collect(db, MustNotBeCalledProvider(), identity, set())
     assert attempted is False
+
+
+def test_execute_reanalyze_auto_collects_for_a_never_researched_identity(tmp_path, monkeypatch):
+    """Regression: auto-collect used to live only in `execute_search_run`.
+
+    A listing whose model missed the search run's collection budget (or that was analyzed
+    by any other caller) could then never acquire reliability data — every re-analysis
+    stayed knowledge-blind, showing `reliability: no_data` forever.
+    """
+    db_path = tmp_path / "test5.db"
+    from app.db.models import Base, KnowledgeEntry, KnowledgeResearchRun, Listing, VehicleIdentity
+    from app.jobs import execute_reanalyze
+    from app.knowledge.extraction import ExtractedEntry, ExtractionResult
+    from app.llm.provider import Citation, GroundedResult
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    Base.metadata.create_all(engine)
+    TestSession = sessionmaker(bind=engine)
+
+    from app.config import get_settings
+    settings = get_settings().model_copy(update={"auto_collect_max_queries": 1})
+    monkeypatch.setattr("app.jobs.get_settings", lambda: settings)
+
+    class GroundingFakeProvider(FakeProvider):
+        def grounded_completion(self, *, purpose, user, model):
+            return GroundedResult(
+                text="The engine is robust.",
+                citations=[Citation(title="t5forum.com", url="https://t5forum.com/x")],
+                model=model, purpose=purpose, input_tokens=5, output_tokens=5,
+            )
+
+    with patch("app.jobs.SessionLocal", TestSession):
+        db = TestSession()
+        identity = VehicleIdentity(brand="VW", model="T5", canonical_label="VW | T5")
+        db.add(identity)
+        db.commit()
+        listing = Listing(
+            kleinanzeigen_id="1", url="https://x", title="VW T5",
+            attributes={}, identity_id=identity.id,
+        )
+        db.add(listing)
+        db.commit()
+        listing_id = listing.id
+        db.close()
+
+        provider = GroundingFakeProvider([
+            ExtractionResult(entries=[
+                ExtractedEntry(type="strength", component="engine", detail="robust"),
+            ]),
+            clean_condition(),
+            a_judgment(),
+        ])
+
+        execute_reanalyze(listing_id, provider=provider)
+
+        db = TestSession()
+        assert db.query(KnowledgeEntry).count() == 1
+        assert db.query(KnowledgeResearchRun).count() == 1
+        # The fresh verdict actually used the knowledge it just collected.
+        analysis = db.query(Analysis).order_by(Analysis.id.desc()).first()
+        assert analysis.reliability["entry_ids"]
+
+
+def test_execute_reanalyze_does_not_recollect_for_a_researched_identity(tmp_path):
+    """Idempotent: a normal re-analysis must not spend grounded quota again."""
+    db_path = tmp_path / "test6.db"
+    from app.db.models import Base, KnowledgeEntry, Listing, VehicleIdentity
+    from app.jobs import execute_reanalyze
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    Base.metadata.create_all(engine)
+    TestSession = sessionmaker(bind=engine)
+
+    class MustNotGroundProvider(FakeProvider):
+        def grounded_completion(self, **kw):
+            raise AssertionError("should not re-collect for an already-researched identity")
+
+    with patch("app.jobs.SessionLocal", TestSession):
+        db = TestSession()
+        identity = VehicleIdentity(brand="VW", model="T5", canonical_label="VW | T5")
+        db.add(identity)
+        db.commit()
+        db.add(KnowledgeEntry(
+            identity_id=identity.id, entry_type="strength",
+            payload={"component": "engine", "detail": "robust"}, source_url="https://x",
+        ))
+        listing = Listing(
+            kleinanzeigen_id="1", url="https://x", title="VW T5",
+            attributes={}, identity_id=identity.id,
+        )
+        db.add(listing)
+        db.commit()
+        listing_id = listing.id
+        db.close()
+
+        execute_reanalyze(
+            listing_id, provider=MustNotGroundProvider([clean_condition(), a_judgment()])
+        )
+
+        db = TestSession()
+        assert db.query(KnowledgeEntry).count() == 1  # unchanged
+
+
+def test_auto_collect_retries_an_identity_whose_research_run_produced_no_entries(tmp_path):
+    """Regression: an interrupted collection used to block an identity permanently.
+
+    The guard keyed off `KnowledgeResearchRun` existing. A run killed between the grounded
+    search and the extraction step leaves an angle logged with zero entries, so the
+    identity looked "already researched" and could never acquire knowledge again. Observed
+    live on a real identity. The gate is now on entries; the builder only consumes
+    not-yet-covered angles, so a retry advances instead of repeating.
+    """
+    db_path = tmp_path / "test7.db"
+    from app.db.models import Base, KnowledgeResearchRun, VehicleIdentity
+    from app.jobs import _maybe_auto_collect
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+
+    identity = VehicleIdentity(brand="VW", model="T5", canonical_label="VW | T5")
+    db.add(identity)
+    db.commit()
+    # An angle was recorded, but extraction never produced anything.
+    db.add(KnowledgeResearchRun(identity_id=identity.id, angle_key="common_problems"))
+    db.commit()
+
+    collected = []
+
+    class RecordingProvider:
+        def grounded_completion(self, **kw):
+            collected.append(kw)
+            raise RuntimeError("grounding unavailable")  # fail-soft path
+
+    attempted = _maybe_auto_collect(db, RecordingProvider(), identity, set())
+
+    assert attempted is True, "an identity with zero entries must be retried"
+    assert collected, "collection should actually have been attempted"

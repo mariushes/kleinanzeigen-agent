@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 from app.analysis.pipeline import run_full_analysis
 from app.config import get_settings
-from app.db.models import KnowledgeEntry, KnowledgeResearchRun, Listing, SearchRun, VehicleIdentity
+from app.db.models import KnowledgeEntry, Listing, SearchRun, VehicleIdentity
 from app.db.session import SessionLocal
 from app.knowledge.builder import build_knowledge_for_identity
 from app.knowledge.sources.web_search import WebSearchSource
@@ -18,6 +18,7 @@ from app.llm.gemini import GeminiProvider
 from app.llm.provider import LLMProvider
 from app.scraping.ingest import run_search
 from app.scraping.kleinanzeigen import KleinanzeigenClient
+from app.services.criteria import get_profile
 from app.vehicles.identity import get_or_create_identity
 
 
@@ -35,12 +36,16 @@ def _maybe_auto_collect(
     if len(collected_identity_ids) >= settings.auto_collect_max_identities_per_run:
         return False
 
-    never_researched = (
-        db.query(KnowledgeResearchRun).filter(KnowledgeResearchRun.identity_id == identity.id).first()
-        is None
-        and db.query(KnowledgeEntry).filter(KnowledgeEntry.identity_id == identity.id).first() is None
+    # Gate on *entries*, not on whether a research run was logged. A run that was
+    # interrupted (or that found nothing) leaves an angle recorded with zero entries, and
+    # keying off the run alone marked such an identity "researched" forever — it could
+    # never acquire knowledge again. Retrying is cheap and bounded: the builder consumes
+    # only angles not yet covered for this identity, so it advances rather than repeats.
+    has_knowledge = (
+        db.query(KnowledgeEntry).filter(KnowledgeEntry.identity_id == identity.id).first()
+        is not None
     )
-    if not never_researched:
+    if has_knowledge:
         return False
 
     collected_identity_ids.add(identity.id)
@@ -82,6 +87,10 @@ def execute_search_run(
         db.commit()
 
         listings = db.query(Listing).filter(Listing.id.in_(ingest_result.listing_ids)).all()
+        # The criteria profile chosen on the dashboard when this run was started. Read once
+        # from the run so every listing in the run is judged under the same criteria, even
+        # if the selection changes while the run is in flight.
+        profile = get_profile(db, search_run.criteria_profile_id)
         collected_identity_ids: set[int] = set()
         for i, listing in enumerate(listings, start=1):
             # Identity first (normally done inside run_full_analysis) so a brand-new
@@ -95,7 +104,7 @@ def execute_search_run(
                 }
                 db.commit()
 
-            run_full_analysis(db, provider, listing)
+            run_full_analysis(db, provider, listing, profile=profile)
             search_run.counts = {**search_run.counts, "analyzed": i}
             db.commit()
 
@@ -111,11 +120,22 @@ def execute_search_run(
         db.close()
 
 
-def execute_reanalyze(listing_id: int, provider: LLMProvider | None = None) -> None:
+def execute_reanalyze(
+    listing_id: int,
+    provider: LLMProvider | None = None,
+    criteria_profile_id: int | None = None,
+) -> None:
     """Re-run the full analysis for one listing, e.g. after new knowledge was collected.
 
     Appends a fresh `Analysis` row (analysis history is append-only), so the detail page's
-    latest-analysis view folds in the current knowledge base and comparables.
+    latest-analysis view folds in the current knowledge base and comparables. If the
+    listing's model has never been researched, a first knowledge pass is collected first
+    (budgeted, fail-soft) — otherwise a listing that missed the search run's collection
+    budget could never acquire reliability data.
+
+    `criteria_profile_id` comes from the re-analyze form, which defaults to whatever the
+    previous verdict was judged under — so a plain "re-analyze" keeps the same criteria,
+    and switching criteria is an explicit choice.
     """
     db = SessionLocal()
     try:
@@ -123,7 +143,16 @@ def execute_reanalyze(listing_id: int, provider: LLMProvider | None = None) -> N
         if listing is None:
             return
         provider = provider or GeminiProvider()
-        run_full_analysis(db, provider, listing)
+
+        # Same first-pass collection the search run does: a listing whose model has never
+        # been researched would otherwise be re-analyzed knowledge-blind forever, since
+        # nothing else triggers collection for it. `_maybe_auto_collect` is idempotent
+        # (it no-ops once entries or research runs exist) and fail-soft.
+        if listing.identity_id is None:
+            get_or_create_identity(db, provider, listing)
+        _maybe_auto_collect(db, provider, listing.identity, set())
+
+        run_full_analysis(db, provider, listing, profile=get_profile(db, criteria_profile_id))
     finally:
         db.close()
 

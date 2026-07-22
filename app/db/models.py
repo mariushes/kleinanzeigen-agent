@@ -58,12 +58,45 @@ class Listing(Base):
     analyses: Mapped[list["Analysis"]] = relationship(back_populates="listing")
 
 
+class BuyerCriteriaProfile(Base):
+    """A named set of buyer requirements the analysis must judge each listing against.
+
+    Deliberately data, not code: the camper-suitability wording lives in a seeded row
+    (`app/criteria/seeds.py`), not in an `app/` branch — same rule as `knowledge_entries`.
+    `free_text` is the user's own words (passed through verbatim), `flags` holds typed
+    toggles/limits, and `aspects` is the list of things the extractor must rate:
+    `[{"key": ..., "label": ..., "prompt": ...}]`.
+    """
+
+    __tablename__ = "buyer_criteria_profiles"
+    __table_args__ = (UniqueConstraint("slug", name="uq_criteria_profile_slug"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    slug: Mapped[str] = mapped_column(String(64))
+    name: Mapped[str] = mapped_column(String(128))
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    free_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    flags: Mapped[dict] = mapped_column(JSON, default=dict)
+    aspects: Mapped[list] = mapped_column(JSON, default=list)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class Analysis(Base):
     __tablename__ = "analyses"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     listing_id: Mapped[int] = mapped_column(ForeignKey("listings.id"))
     listing: Mapped[Listing] = relationship(back_populates="analyses")
+
+    # Which buyer-criteria profile this verdict was judged under (NULL = none, the
+    # pre-criteria behaviour). Stamped per analysis rather than read live, so a later run
+    # under a different profile doesn't silently reinterpret this verdict.
+    criteria_profile_id: Mapped[int | None] = mapped_column(
+        ForeignKey("buyer_criteria_profiles.id"), nullable=True
+    )
+    criteria_profile: Mapped["BuyerCriteriaProfile | None"] = relationship()
 
     condition: Mapped[dict] = mapped_column(JSON, default=dict)
     price: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -79,6 +112,25 @@ class Analysis(Base):
     reasoning_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     llm_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CriteriaAssessment(Base):
+    """Structured per-listing read against one buyer-criteria profile.
+
+    Persisted alongside the verdict for the same reason the structured condition analysis
+    is: the typed findings can be listed, filtered and reused later, even though the
+    headline judgment is the single holistic call.
+    """
+
+    __tablename__ = "criteria_assessments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    listing_id: Mapped[int] = mapped_column(ForeignKey("listings.id"))
+    profile_id: Mapped[int] = mapped_column(ForeignKey("buyer_criteria_profiles.id"))
+    analysis_id: Mapped[int | None] = mapped_column(ForeignKey("analyses.id"), nullable=True)
+
+    findings: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -118,6 +170,11 @@ class SearchRun(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     search_url: Mapped[str] = mapped_column(String(1024))
     max_listings: Mapped[int] = mapped_column(Integer)
+    # Buyer-criteria profile chosen on the dashboard when this run was started; every
+    # listing analyzed by the run is judged under it.
+    criteria_profile_id: Mapped[int | None] = mapped_column(
+        ForeignKey("buyer_criteria_profiles.id"), nullable=True
+    )
     status: Mapped[str] = mapped_column(String(16), default="pending")
     counts: Mapped[dict] = mapped_column(JSON, default=dict)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)

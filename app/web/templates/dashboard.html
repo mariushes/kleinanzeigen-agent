@@ -5,14 +5,36 @@
 <form action="/search-runs" method="post">
     <input type="url" name="search_url" placeholder="Kleinanzeigen search URL" size="60" required>
     <input type="number" name="max_listings" value="{{ default_max_listings }}" min="1" max="{{ max_listings_hard_cap }}">
+    {% if criteria_profiles %}
+    <label>
+        Judge for:
+        <select name="criteria_profile_id">
+            <option value="">General purpose (no special needs)</option>
+            {% for profile in criteria_profiles %}
+            <option value="{{ profile.id }}">{{ profile.name }}</option>
+            {% endfor %}
+        </select>
+    </label>
+    {% endif %}
     <button type="submit">Scan</button>
 </form>
+{% if criteria_profiles %}
+<p><small class="muted">Every listing in this scan is judged against the criteria you pick
+here, and each verdict records which criteria it was judged under.</small></p>
+{% endif %}
 
 {% if active_run %}
     {% with run = active_run %}{% include "_search_run_status.html" %}{% endwith %}
 {% endif %}
 
 {% if rows %}
+{# Only show the criteria column when some verdict was actually judged under a profile,
+   so a general-purpose dashboard looks exactly as it did before criteria existed. #}
+{% set ns = namespace(criteria_label=None) %}
+{% for row in rows %}
+    {% set ax = (row.analysis.verdict_axes or {}).get("criteria") %}
+    {% if ax and not ns.criteria_label %}{% set ns.criteria_label = ax.get("label", "Criteria") %}{% endif %}
+{% endfor %}
 <p>
     Sort by:
     <a href="/?sort=score">score</a> ·
@@ -26,6 +48,9 @@
             <th title="Is the asking price fair vs. comparable listings?">Price</th>
             <th title="This ad's red flags and positive signals">Condition</th>
             <th title="How dependable this model/engine configuration is, from the knowledge base">Reliability</th>
+            {% if ns.criteria_label %}
+            <th title="How well this vehicle serves your stated purpose">{{ ns.criteria_label }}</th>
+            {% endif %}
             <th>Confidence</th><th>Verdict</th>
         </tr>
     </thead>
@@ -37,10 +62,11 @@
             <td>{{ row.listing.price_eur }} €</td>
             <td>{{ row.listing.year }}</td>
             <td>{{ row.listing.mileage_km }} km</td>
-            {% for key in ["price", "condition", "reliability"] %}
+            {% for key in ["price", "condition", "reliability"] + (["criteria"] if ns.criteria_label else []) %}
             {% set ax = b.get(key) %}
             <td>
                 {% if ax %}<span class="chip rating-{{ ax.rating }}">{{ "No data" if ax.rating == "no_data" else ax.rating }}</span>
+                {# A dash means this verdict predates the criteria, not that it scored badly. #}
                 {% else %}–{% endif %}
             </td>
             {% endfor %}

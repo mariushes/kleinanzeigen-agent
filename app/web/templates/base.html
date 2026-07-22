@@ -39,6 +39,21 @@
         .axis-label { font-size: 0.8em; color: #777; text-transform: uppercase; letter-spacing: 0.03em; }
         .axis-rating { font-weight: 700; text-transform: capitalize; }
         .axis-note { font-size: 0.88em; color: #444; margin-top: 0.2rem; }
+        /* Buyer-criteria per-requirement verdicts. "unknown" is deliberately grey and
+           quiet — the ad being silent is an open question, not a mark against the van. */
+        .criteria-meets { color: #1a7f37; font-weight: bold; }
+        .criteria-partial { color: #9a6700; font-weight: bold; }
+        .criteria-fails { color: #b31d28; font-weight: bold; }
+        .criteria-unknown { color: #999; }
+        .reanalyze-form { margin: 0.8rem 0; }
+        /* KB match quality. An inherited read must not look as authoritative as an exact
+           one, so the weaker tiers are visually warned rather than merely labelled. */
+        .kb-match { padding: 0.5rem 0.75rem; border-radius: 6px; margin: 0.5rem 0 0.75rem;
+                    border-left: 5px solid #ccc; background: #f6f8fa; font-size: 0.92em; }
+        .kb-match-exact_identity { border-left-color: #1a7f37; background: #f0fbf3; }
+        .kb-match-model_wide { border-left-color: #9a6700; background: #fffbef; }
+        .kb-match-same_generation { border-left-color: #9a6700; background: #fffbef; }
+        .kb-match-same_model { border-left-color: #b31d28; background: #fff5f4; }
     </style>
 </head>
 <body>

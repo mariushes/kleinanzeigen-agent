@@ -2,8 +2,9 @@
 
 Kleinanzeigen search results mix in "wanted"/buy-my-car-for-cash ads alongside actual
 for-sale listings (e.g. "Motorschaden Ankauf Golf, T5, T6..." — a scrap dealer fishing
-for leads, not a van for sale). We filter those out heuristically before fetching full
-details, since they'd otherwise pollute the comparables pool with junk price signals.
+for leads — or "SUCHE ausgebauten Camper Van" from a private buyer). We filter those out
+before fetching full details: they have no vehicle to analyze, so they'd otherwise spend
+LLM calls on nothing and pollute the comparables pool with junk price signals.
 """
 
 import re
@@ -15,22 +16,24 @@ from app.db.models import Listing
 from app.scraping.kleinanzeigen import KleinanzeigenClient, SearchResultItem
 
 _WANTED_AD_PATTERN = re.compile(
-    r"\b(suche|gesucht|ankauf|kaufe|wir kaufen)\b", re.IGNORECASE
-)
-_MULTI_MODEL_PATTERN = re.compile(
-    r"(t5|t6|golf|passat|touran|tiguan|caddy).*(t5|t6|golf|passat|touran|tiguan|caddy)",
-    re.IGNORECASE,
+    r"\b(suche|gesucht|ankauf|ankaufe|kaufe|wir kaufen)\b", re.IGNORECASE
 )
 
 
-def is_likely_wanted_ad(title: str, description: str) -> bool:
-    text = f"{title} {description}"
-    if not _WANTED_AD_PATTERN.search(title):
-        return False
-    # A single "Suche VW T5" post from a private buyer is plausible; a dealer ad
-    # naming several unrelated models ("Golf 6 7 Tiguan Polo T5 T6 Passat...") is
-    # almost always a mass buy-any-car solicitation, not a real listing.
-    return bool(_MULTI_MODEL_PATTERN.search(text)) or "ankauf" in title.lower()
+def is_likely_wanted_ad(title: str, description: str = "") -> bool:  # noqa: ARG001
+    """True for ads where someone wants to *buy* a vehicle rather than sell one.
+
+    Any wanted post is skipped, whether it's a dealer fishing for leads or a private
+    "Suche VW T5" — neither has a vehicle to analyze, so letting one through spends LLM
+    calls on nothing and pollutes the comparables pool with a wished-for price.
+
+    Matching is title-only and deliberately brand-agnostic: an earlier version required a
+    second signal (two model names from a hardcoded VW list) before skipping, which let
+    "SUCHE Ausgebauten Camper Van: T5, Vito, Transit, Trafic" through — only `T5` was on
+    the list. Don't reintroduce a model-name list here. `description` is unused today but
+    kept in the signature for a future body-text refinement.
+    """
+    return bool(_WANTED_AD_PATTERN.search(title))
 
 
 @dataclass

@@ -65,6 +65,19 @@ def list_identity_entries(db: Session, identity_id: int) -> list[KnowledgeEntry]
     )
 
 
+def entries_for_listing(db: Session, listing_id: int) -> list[KnowledgeEntry]:
+    """Knowledge entries for a listing's vehicle model.
+
+    Entries are attached to the vehicle identity rather than the individual listing, so
+    this resolves the listing's identity and returns that identity's entries. Empty if the
+    listing is unknown or has no identified vehicle.
+    """
+    listing = db.query(Listing).filter(Listing.id == listing_id).first()
+    if listing is None or listing.identity_id is None:
+        return []
+    return list_identity_entries(db, listing.identity_id)
+
+
 def covered_research_angles(db: Session, identity_id: int) -> list[str]:
     """Which research angles have already been collected for an identity."""
     return [

@@ -26,11 +26,25 @@
     <div class="banner">
         <strong>New knowledge has been collected for this model</strong> since this verdict was
         computed — the assessment below may be outdated.
-        <form method="post" action="/listings/{{ listing.id }}/reanalyze" style="display:inline; margin:0 0 0 0.5rem">
-            <button type="submit">Re-analyze against current knowledge</button>
-        </form>
     </div>
     {% endif %}
+
+    {# Re-analyzing defaults to the criteria this verdict was already judged under, so
+       re-running after new knowledge doesn't silently change the criteria too. #}
+    <form method="post" action="/listings/{{ listing.id }}/reanalyze" class="reanalyze-form">
+        {% if criteria_profiles %}
+        <label>
+            Judge for:
+            <select name="criteria_profile_id">
+                <option value="" {% if not criteria_profile %}selected{% endif %}>General purpose (no special needs)</option>
+                {% for profile in criteria_profiles %}
+                <option value="{{ profile.id }}" {% if criteria_profile and profile.id == criteria_profile.id %}selected{% endif %}>{{ profile.name }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        {% endif %}
+        <button type="submit">Re-analyze</button>
+    </form>
 
     {% set b = analysis.verdict_axes or {} %}
     <section>
@@ -39,11 +53,15 @@
             <span class="tier-{{ analysis.tier }}">{{ analysis.tier }}</span>
             <small class="muted">· score {{ analysis.overall_score }}/100</small>
             {% if analysis.confidence %}<small class="muted">· confidence: {{ analysis.confidence }}</small>{% endif %}
+            {% if criteria_profile %}<small class="muted">· judged for: {{ criteria_profile.name }}</small>{% endif %}
         </h2>
 
         {% if b %}
         <div class="axes">
-            {% for key, label in [("price", "Price"), ("condition", "Condition"), ("reliability", "Model reliability"), ("positives", "Positive signals")] %}
+            {% set criteria_axis = b.get("criteria") %}
+            {% set axis_specs = [("price", "Price"), ("condition", "Condition"), ("reliability", "Model reliability"), ("positives", "Positive signals")] %}
+            {% if criteria_axis %}{% set axis_specs = axis_specs + [("criteria", criteria_axis.get("label", "Your criteria"))] %}{% endif %}
+            {% for key, label in axis_specs %}
             {% set ax = b.get(key) %}
             {% if ax %}
             <div class="axis rating-{{ ax.rating }}">
@@ -85,6 +103,40 @@
         {% endif %}
     </section>
 
+    {% if criteria_findings %}
+    <section>
+        <h2>{{ criteria_profile.name if criteria_profile else "Your criteria" }} — requirements fit</h2>
+        <p>{{ criteria_findings.summary }}</p>
+        {% if criteria_findings.findings %}
+        {% set aspect_labels = {} %}
+        {% if criteria_profile %}
+            {% for a in criteria_profile.aspects %}{% set _ = aspect_labels.update({a.key: a.label}) %}{% endfor %}
+        {% endif %}
+        <table>
+            <thead><tr><th>Verdict</th><th>Requirement</th><th>Assessment</th><th>Quote</th></tr></thead>
+            <tbody>
+                {% for f in criteria_findings.findings %}
+                <tr>
+                    <td class="criteria-{{ f.verdict }}">
+                        {{ "Not stated" if f.verdict == "unknown" else f.verdict }}
+                        {% if f.severity and f.verdict != "unknown" %}<small class="muted">({{ f.severity }})</small>{% endif %}
+                    </td>
+                    <td>{{ aspect_labels.get(f.aspect, f.aspect) }}</td>
+                    <td>{{ f.description }}</td>
+                    <td>{% if f.supporting_quote %}<em>"{{ f.supporting_quote }}"</em>{% endif %}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <p><small class="muted">“Not stated” means the ad is silent on that requirement — an
+        open question for the seller, not a mark against the vehicle.</small></p>
+        {% endif %}
+        {% if criteria_findings.positive_signals %}
+        <p><strong>Positive signals:</strong> {{ criteria_findings.positive_signals | join(", ") }}</p>
+        {% endif %}
+    </section>
+    {% endif %}
+
     {% set det = (analysis.reliability or {}).get("deterministic") %}
     <section>
         <h2>Model reliability — strengths &amp; concerns (KB)</h2>
@@ -108,7 +160,27 @@
     <section>
         <h2>Reliability knowledge base (source entries)</h2>
         {% if kb_entries %}
-        <p>Match tier: <code>{{ kb_tier }}</code></p>
+        {# Colour-coded so an inherited, possibly-inapplicable read can't be mistaken for
+           an exact one. `same_model`/`same_generation` mean these facts were collected for
+           a DIFFERENT engine variant. #}
+        <div class="kb-match kb-match-{{ kb_tier }}">
+            {% if kb_tier == "exact_identity" %}
+                <strong>Exact match.</strong> These facts were researched for this exact
+                configuration{% if listing.identity %} (<code>{{ listing.identity.canonical_label }}</code>){% endif %}.
+            {% elif kb_tier == "model_wide" %}
+                <strong>Model-wide knowledge.</strong> This ad doesn't say which engine it
+                has, so everything known about the
+                <strong>{{ listing.identity.model if listing.identity else "model" }}</strong>
+                is shown. Some of it will be engine-specific and may not apply — ask the
+                seller which engine it is.
+            {% else %}
+                <strong>Not an exact match ({{ kb_tier }}).</strong> No knowledge has been
+                collected for this exact engine variant yet, so these facts come from
+                <em>other</em>
+                <strong>{{ listing.identity.model if listing.identity else "model" }}</strong>
+                variants. Engine-specific faults listed below may not apply to this vehicle.
+            {% endif %}
+        </div>
         <table>
             <thead><tr><th>Type</th><th>Component</th><th>Detail</th><th>Mentions</th><th>Source</th></tr></thead>
             <tbody>

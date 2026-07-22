@@ -28,7 +28,14 @@ _SEVERITY_RANK = {"minor": 1, "moderate": 2, "major": 3, "catastrophic": 4}
 _RANK_SEVERITY = {v: k for k, v in _SEVERITY_RANK.items()}
 
 RISK_PENALTY = {"none": 0, "low": 5, "moderate": 12, "high": 22, "severe": 32}
-TIER_FACTOR = {"exact_identity": 1.0, "same_generation": 0.8, "same_model": 0.6}
+TIER_FACTOR = {
+    "exact_identity": 1.0,
+    "same_generation": 0.8,
+    # Model-wide knowledge for an ad that never named its engine: the facts are about the
+    # right model line, so they carry more weight than a guess at a sibling engine.
+    "model_wide": 0.8,
+    "same_model": 0.6,
+}
 
 _STRENGTH_BONUS = 3
 _MAX_STRENGTH_BONUS = 9

@@ -21,6 +21,16 @@ def latest_analysis(listing: Listing) -> Analysis | None:
     return max(listing.analyses, key=lambda a: a.created_at)
 
 
+def list_listings(db: Session) -> list[Listing]:
+    """Every listing, analyzed or not."""
+    return db.query(Listing).all()
+
+
+def get_listing(db: Session, listing_id: int) -> Listing | None:
+    """A single listing by id, or None if it doesn't exist."""
+    return db.query(Listing).filter(Listing.id == listing_id).first()
+
+
 @dataclass
 class ListingRow:
     listing: Listing

@@ -41,13 +41,38 @@ def make_listing(db, title="Volkswagen T5 Multivan 2.0 TDI") -> Listing:
 
 
 def test_build_canonical_label_joins_present_fields():
-    label = build_canonical_label("Volkswagen", "T5 Multivan", "T5.1", "2.0 TDI 180 PS", "Highline")
-    assert label == "Volkswagen | T5 Multivan | T5.1 | Highline | 2.0 TDI 180 PS"
+    label = build_canonical_label("Volkswagen", "T5 Multivan", "T5.1", "2.0 TDI")
+    assert label == "Volkswagen | T5 Multivan | T5.1 | 2.0 TDI"
 
 
 def test_build_canonical_label_skips_missing_fields():
-    label = build_canonical_label("Volkswagen", "T5 Multivan", None, None, None)
+    label = build_canonical_label("Volkswagen", "T5 Multivan", None, None)
     assert label == "Volkswagen | T5 Multivan"
+
+
+def test_build_canonical_label_ignores_trim():
+    """Trim varies with how much the seller chose to write and describes equipment, not
+    the mechanical configuration reliability knowledge is about — including it would
+    fragment one vehicle across ads that mention it and ads that don't."""
+    with_trim = build_canonical_label("Volkswagen", "T5 Multivan", None, "2.0 TDI", "Highline")
+    without_trim = build_canonical_label("Volkswagen", "T5 Multivan", None, "2.0 TDI")
+
+    assert with_trim == without_trim == "Volkswagen | T5 Multivan | 2.0 TDI"
+
+
+def test_build_canonical_label_uses_engine_family_so_power_wobble_does_not_fragment():
+    """The same engine is advertised as "102 PS" and "105 PS"; both must give one identity.
+
+    `engine_family` is the LLM's power-free designation, deliberately not a regex over
+    the engine string — a `tdi|tsi|cdi` pattern list is one brand's naming convention and
+    would silently mangle other marques.
+    """
+    a = build_canonical_label("Volkswagen", "T5 Transporter", None, "1.9 TDI")
+    b = build_canonical_label("Volkswagen", "T5 Transporter", None, "1.9 TDI")
+
+    assert a == b == "Volkswagen | T5 Transporter | 1.9 TDI"
+    # ...but genuinely different engines stay separate.
+    assert a != build_canonical_label("Volkswagen", "T5 Transporter", None, "2.0 TDI")
 
 
 def test_get_or_create_identity_creates_and_links():

@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db.models import SearchRun
 from app.db.session import get_db
+from app.services.criteria import list_profiles
 from app.services.listings import list_analyzed_listings
 from app.web.templating import templates
 
@@ -32,6 +33,9 @@ def dashboard(request: Request, sort: str = "score", db: Session = Depends(get_d
             "active_run": active_run,
             "default_max_listings": settings.default_max_listings,
             "max_listings_hard_cap": settings.max_listings_hard_cap,
+            # Criteria are chosen per search run, so the choice lives on the search form
+            # and is recorded on what it produces — no global "current profile" state.
+            "criteria_profiles": list_profiles(db),
         },
     )
 

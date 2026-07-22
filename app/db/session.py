@@ -3,6 +3,7 @@ from pathlib import Path
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
+from langchain_community.utilities import SQLDatabase
 
 from app.config import get_settings
 
@@ -25,3 +26,6 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
+
+def get_langchain_db_wrapper() -> SQLDatabase:
+    return SQLDatabase.from_uri(settings.database_url)

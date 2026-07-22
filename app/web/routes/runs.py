@@ -6,6 +6,7 @@ from app.config import get_settings
 from app.db.models import SearchRun
 from app.db.session import get_db
 from app.jobs import execute_search_run
+from app.services.criteria import get_profile
 from app.web.templating import templates
 
 router = APIRouter()
@@ -16,12 +17,21 @@ def create_search_run(
     background_tasks: BackgroundTasks,
     search_url: str = Form(...),
     max_listings: int = Form(...),
+    criteria_profile_id: str = Form(""),
     db: Session = Depends(get_db),
 ):
     settings = get_settings()
     max_listings = max(1, min(max_listings, settings.max_listings_hard_cap))
 
-    search_run = SearchRun(search_url=search_url, max_listings=max_listings, status="pending")
+    # Empty string = "no criteria", the dropdown's default option.
+    profile = get_profile(db, int(criteria_profile_id) if criteria_profile_id else None)
+
+    search_run = SearchRun(
+        search_url=search_url,
+        max_listings=max_listings,
+        criteria_profile_id=profile.id if profile else None,
+        status="pending",
+    )
     db.add(search_run)
     db.commit()
 

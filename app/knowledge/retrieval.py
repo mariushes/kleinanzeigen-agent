@@ -31,6 +31,24 @@ def get_reliability_summary(db: Session, identity: VehicleIdentity | None) -> Re
     if identity is None:
         return ReliabilitySummary()
 
+    # The ad never revealed which engine it is, so there is no "exact" variant to be
+    # precise about: everything known about the model line is equally applicable, and
+    # returning only this vague identity's own entries would hide most of it. This is the
+    # correct answer for an unidentified variant, not a degraded fallback — hence its own
+    # tier name, which the UI renders differently from a cross-variant guess.
+    if not identity.engine_code:
+        entries = (
+            db.query(KnowledgeEntry)
+            .join(VehicleIdentity, KnowledgeEntry.identity_id == VehicleIdentity.id)
+            .filter(
+                (VehicleIdentity.brand == identity.brand)
+                & (VehicleIdentity.model == identity.model)
+            )
+            .all()
+        )
+        if entries:
+            return ReliabilitySummary(entries=entries, tier="model_wide")
+
     tiers: list[tuple[str, object]] = [("exact_identity", KnowledgeEntry.identity_id == identity.id)]
     if identity.generation:
         tiers.append(

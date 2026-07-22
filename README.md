@@ -27,14 +27,15 @@ search URL ──▶ ebay-kleinanzeigen-api sidecar (Playwright) ──▶ Listi
                         ▼                                            ▼
              vehicle identity (LLM)                       condition analysis (LLM)
                         │                                            │
-                        ▼                                            │
-             reliability KB  ◀──── grounded web research            │
+                        ▼                                     buyer criteria (LLM,
+             reliability KB  ◀──── grounded web research      if a profile is picked)
              (per identity)        (Gemini google_search)           │
                         │              comparables (DB, w/ deltas)   │
                         └──────────────────────┬─────────────────────┘
                                                ▼
                               holistic judgment (one LLM call): weighs
                               price · condition · reliability · positives
+                              (· your criteria)
                               → score + per-axis ratings + reasoning
 ```
 
@@ -79,15 +80,35 @@ uv run uvicorn app.main:app --reload --port 8080
 Then open <http://127.0.0.1:8080>:
 
 1. Paste a Kleinanzeigen **search URL** (e.g. a VW T5 search) and a max-listings count,
-   then **Scan**. Scraping + analysis runs in the background; progress updates live.
-   (Analysis is paced by the Gemini free-tier rate limit, so ~10 listings takes a couple
-   of minutes.)
+   then **Scan**. Optionally pick what you want the van **for** (e.g. *Camper conversion*)
+   — every listing in that scan is then also judged on how well it fits those needs, as an
+   extra axis in the verdict. Scraping + analysis runs in the background; progress updates
+   live. (Analysis is paced by the Gemini free-tier rate limit, so ~10 listings takes a
+   couple of minutes.)
 2. The dashboard lists analyzed listings, sortable by score / price / mileage. Click one
    for the full breakdown.
 3. On the **Knowledge base** page, click **Collect** for a model to research its
    reliability. Re-running **Refresh** broadens coverage (it advances through new research
    angles rather than repeating). Then **Re-analyze** a listing to fold the new knowledge
-   into its verdict.
+   into its verdict. The re-analyze form also lets you switch which buyer criteria the
+   listing is judged against; each verdict records the criteria it was judged under.
+
+### Buyer criteria
+
+A criteria profile describes what you want the vehicle *for*, in your own words plus the
+specific aspects the analysis should rate. **Camper conversion** ships by default: it
+rates conversion status, build quality of self-made interiors, electrics, gas installation
+(incl. a valid *Gasprüfung*), insulation/damp, and base-vehicle fit.
+
+Profiles live as YAML in [`app/criteria/profiles/`](app/criteria/profiles/) — edit
+`camper.yaml` to change the wording, or drop in a new file for a different use case, then
+restart the app (or run `uv run python -m app.criteria.loader`). There is no editor UI yet.
+
+Per-requirement results read **meets / partial / fails / Not stated**. "Not stated" means
+the ad simply doesn't mention it — a question for the seller, not a mark against the van;
+if an ad is silent on everything, the criteria axis shows grey "No data" rather than a bad
+rating. Note that conversion details are often only visible in the **photos**, which aren't
+analyzed yet, so expect "Not stated" on interior aspects for ads with thin descriptions.
 
 ## Configuration
 
@@ -126,7 +147,10 @@ services.
   Put query/shaping logic here, not in a route, so it can be reused.
 - `app/analysis/` — `pipeline.py` orchestrates a listing's analysis (DB + LLM) into one
   `Analysis` row; `verdict.py` is the pure scoring step; `judgment.py` is the single
-  holistic LLM verdict call; `condition.py`, `comparables.py`, `reliability_score.py`,
-  and `pricing.py` prepare its inputs.
+  holistic LLM verdict call; `condition.py`, `criteria.py`, `comparables.py`,
+  `reliability_score.py`, and `pricing.py` prepare its inputs.
+- `app/criteria/` — buyer-criteria profiles. The wording lives in `profiles/*.yaml`
+  (data, version-controlled); `loader.py` upserts them by slug on startup. Add a criteria
+  set by adding a YAML file — never a code branch.
 - `app/knowledge/` — the reliability KB: `sources/` (grounded web research behind a
   `KnowledgeSource` protocol), `builder.py`, `extraction.py`, `retrieval.py`.

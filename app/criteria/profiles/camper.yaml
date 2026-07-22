@@ -1,0 +1,85 @@
+# Buyer-criteria profile: camper conversion.
+#
+# This file is DATA, not code — it is the source of truth for the camper criteria and is
+# loaded into `buyer_criteria_profiles` by `app/criteria/loader.py` (which knows nothing
+# about campers). Edit the wording here; it is version-controlled and diffable, and the
+# loader upserts it by `slug` on the next app start or `python -m app.criteria.loader`.
+#
+# `aspects[].prompt` is injected verbatim into the criteria-extraction prompt, so write
+# each one as an instruction to the model. Adding a new criteria set = adding a new file
+# in this directory, never a code branch.
+
+slug: camper
+name: Camper conversion
+description: >-
+  Judge the van as a base for living/travelling in — whether it is already converted,
+  how well, and how suitable it is to convert.
+
+free_text: >-
+  I want to use this van as a camper. It does not have to be converted already, but if it
+  is, the quality of that conversion matters a lot to me — I can't judge amateur build
+  work myself. If it isn't converted, I care about whether it is a good base vehicle to
+  convert.
+
+flags:
+  # false on purpose: the T5-class vans in scope essentially never have standing height,
+  # so requiring it made every listing fail a criterion none of them can meet. Set to true
+  # only if the search widens to high-roof / pop-top vehicles.
+  wants_standing_height: false
+  wants_existing_conversion: false
+  self_build_acceptable: true
+
+aspects:
+  - key: interior_status
+    label: Conversion status
+    prompt: >-
+      Is the van (a) already converted into a camper, (b) an empty panel van / windowed bus
+      that is suitable to convert, or (c) a poor base for a camper (e.g. fixed commercial
+      fit-out, a bulkhead that can't be removed, seats and trim that would all have to go)?
+      Report which, and the evidence. 'meets' = already converted or an easy base;
+      'partial' = convertible with real work; 'fails' = poor base.
+
+  - key: build_quality
+    label: Build quality of the conversion
+    prompt: >-
+      ONLY if a conversion exists: is it professional (a known converter, e.g.
+      Westfalia/Reimo/California, or a coachbuilt job) or self-made/amateur? Judge the
+      described materials and workmanship — screwed-together chipboard, "selbst ausgebaut",
+      "Eigenbau", "noch nicht ganz fertig" and unfinished work are warnings; solid
+      furniture, a named converter, documented work and a registered conversion ("als
+      Wohnmobil zugelassen") are good signs. If there is no conversion, return verdict
+      'unknown'.
+
+  - key: electrics
+    label: Electrical system
+    prompt: >-
+      The leisure-electrics setup: second/leisure battery, split charging, solar, shore
+      power (230V/Landstrom), inverter, fusing. Amateur 230V wiring is a safety and
+      insurance risk — flag vague or self-made electrical work. No mention at all =
+      'unknown', not 'fails'.
+
+  - key: gas_installation
+    label: Gas installation
+    prompt: >-
+      Any gas system (cooker, heater, Truma, gas bottle locker) and crucially whether it
+      has a valid gas inspection — in Germany "Gasprüfung" / G607, normally required every
+      2 years. Self-installed gas without a certificate is a serious red flag ('fails').
+      No gas system mentioned = 'unknown'.
+
+  - key: insulation_moisture
+    label: Insulation & moisture
+    prompt: >-
+      Insulation, heating (Standheizung/Webasto/Truma), ventilation, and any sign of damp:
+      condensation, mould ("Schimmel"), water ingress around roof vents, windows or a
+      pop-top roof. Damp in a conversion often means hidden rot in the structure behind the
+      panelling — weight it heavily.
+
+  - key: base_vehicle_fit
+    label: Base-vehicle fit
+    prompt: >-
+      Does the vehicle itself suit camper use: wheelbase and interior length for a bed
+      (long wheelbase / "lang" is a real advantage), payload headroom for a build, and the
+      number of registered seats/beds. A pop-top roof ("Aufstelldach") or high roof is a
+      bonus worth calling out, but a standard roof ("Normaldach") is the norm for this
+      class of van and must NOT be treated as a failure on its own — only mark 'fails' if
+      the vehicle is genuinely unsuitable as a camper base (e.g. far too short for a bed).

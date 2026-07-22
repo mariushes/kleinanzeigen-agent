@@ -38,8 +38,33 @@ def test_is_likely_wanted_ad_allows_genuine_listing():
     )
 
 
-def test_is_likely_wanted_ad_allows_private_single_model_wanted_post():
-    assert not is_likely_wanted_ad("Suche VW T5 in gutem Zustand", "Zahle fair, bar")
+def test_is_likely_wanted_ad_flags_private_single_model_wanted_post():
+    """A private wanted post has no vehicle to analyze either, so it's skipped too.
+
+    (This deliberately reverses the earlier carve-out that let these through.)
+    """
+    assert is_likely_wanted_ad("Suche VW T5 in gutem Zustand", "Zahle fair, bar")
+
+
+def test_is_likely_wanted_ad_flags_cross_brand_wanted_post():
+    """Regression: this real ad slipped through and burned four LLM calls on a non-vehicle.
+
+    The old filter needed two model names from a hardcoded VW list before skipping, and
+    only `T5` was on it — Vito/Transit/Trafic are other brands. Matching is now
+    title-only and brand-agnostic.
+    """
+    assert is_likely_wanted_ad(
+        "SUCHE Ausgebauten Camper Van: T5, Vito, Transit, Trafic, o.Ä.",
+        "Ich suche einen bereits ausgebauten Camper Van",
+    )
+
+
+def test_is_likely_wanted_ad_ignores_sell_ads_that_mention_buying_in_the_body():
+    """Only the title decides — a genuine seller inviting trade-ins must not be skipped."""
+    assert not is_likely_wanted_ad(
+        "Volkswagen T5 Transporter zum Wohnmobil ausgebaut",
+        "Gerne nehmen wir auch Ihr Fahrzeug in Zahlung. Wir kaufen Gebrauchtwagen.",
+    )
 
 
 def test_run_search_filters_wanted_ads_and_stores_listings():
