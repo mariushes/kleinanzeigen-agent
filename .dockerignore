@@ -1,0 +1,15 @@
+# The scraping sidecar is built as its own image (docker-compose service `sidecar`),
+# not bundled into the app image — keep its ~large Playwright/vendored tree out.
+vendor/
+
+.venv/
+.git/
+__pycache__/
+*.py[oc]
+.pytest_cache/
+data/
+*.db
+*.db-journal
+.env
+tests/
+dev_wip.py
