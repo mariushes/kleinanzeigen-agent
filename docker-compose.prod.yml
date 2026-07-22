@@ -1,0 +1,45 @@
+# Production override for running on a single EC2 instance. Layered ON TOP of
+# docker-compose.yml (which stays the local-dev experience):
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# What this override changes vs. local:
+#   - restart: unless-stopped on every service, so containers survive crashes and an
+#     instance reboot (paired with `systemctl enable docker` on the host).
+#   - DB password comes from the environment (POSTGRES_PASSWORD), not a hardcoded literal,
+#     so the real password lives only in the instance's env/secret, never in git.
+#   - the app's DATABASE_URL is templated from the same vars, and can be overridden
+#     entirely to point at RDS instead of the `db` container (see DEPLOY.md).
+#   - Postgres port 5432 is NOT published to the host (local file published it for psql).
+#
+# Required env on the host (see DEPLOY.md for how to load it): GEMINI_API_KEY,
+# POSTGRES_PASSWORD. Optional: DATABASE_URL (to use RDS instead of the db container).
+
+services:
+  db:
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD on the host}
+    # Override the base file's "5432:5432" so Postgres is reachable only inside the
+    # compose network, never from outside the instance. Compose MERGES port lists across
+    # files, so `!reset` is required to actually drop the base publish (a plain `[]` won't).
+    ports: !reset []
+
+  sidecar:
+    restart: unless-stopped
+
+  app:
+    restart: unless-stopped
+    environment:
+      # Default to the db container; override DATABASE_URL in the host env to use RDS.
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://kleinanzeigen:${POSTGRES_PASSWORD}@db:5432/kleinanzeigen}
+      KLEINANZEIGEN_API_BASE_URL: http://sidecar:8000
+      GEMINI_API_KEY: ${GEMINI_API_KEY:?set GEMINI_API_KEY on the host}
+    # Bind to localhost on the instance, not 0.0.0.0 — there is no auth, so the app must
+    # not be directly reachable from the internet. Reach it via SSH tunnel (see DEPLOY.md).
+    # `!override` REPLACES the base file's "8080:8080" (all-interfaces) publish rather than
+    # merging with it — without it Compose merges the two lists, leaving the app ALSO
+    # exposed on 0.0.0.0. Verified: the merged config shows exactly one app port entry,
+    # host_ip 127.0.0.1. To front it with an ALB later, use "8080:8080" and add a listener.
+    ports: !override
+      - "127.0.0.1:8080:8080"

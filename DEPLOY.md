@@ -59,12 +59,20 @@ is roughly "cheapest/simplest first, most production-ready last."
 
 | Option | When | Notes |
 |---|---|---|
-| **Single EC2 + docker-compose** | Cheapest first cut on AWS | `scp` this repo (or pull it) onto one instance, install Docker, `docker compose up -d`. Postgres can be the compose `db` service on the same box, or RDS. No auto-heal/scale, but it *is* running on AWS and behaves exactly like local. |
-| **ECS Fargate** (recommended target) | "Iterating toward production" | Two container definitions (app + sidecar) in **one task** so they share a network namespace and the app reaches the sidecar at `localhost:8000` — or two services with service discovery. No servers to patch. Fronted by an ALB. This is the natural home for this app. |
+| **Single EC2 + docker-compose** (chosen) | Simplest thing that runs on AWS | Pull this repo onto one instance, install Docker, `docker compose ... up -d`. Postgres is the compose `db` service on the same box (EBS-backed volume) or RDS. No auto-heal/scale, but it *is* running on AWS and behaves exactly like local. Full runbook in §3. |
+| **ECS Fargate** | Later, if you outgrow one box | Two containers (app + sidecar) in **one task** so they share a network namespace and the app reaches the sidecar at `localhost:8000`. No servers to patch. Fronted by an ALB. |
 | App Runner / Lambda | ❌ don't | App Runner is single-container (no place for the sidecar); Lambda can't hold a persistent Chromium or run the in-process `BackgroundTasks` jobs. |
 
-Sidecar note: it needs meaningful CPU/RAM for Chromium — give the task/instance at least
-1 vCPU / 2 GB, more if you scrape larger batches.
+> **"Doesn't docker-compose not work on Fargate?"** Half true. The `docker-compose.yml`
+> *file* is a local-dev tool — nothing on AWS runs it directly. The old `docker compose up`
+> **against an ECS context** (`docker context create ecs`) was removed by Docker in 2023;
+> that shortcut is gone. But Fargate itself runs multi-container setups fine — you just
+> write an **ECS task definition** instead of a compose file. So compose-vs-Fargate is
+> really "keep managing one EC2 box" vs. "let AWS manage the host, translate compose to a
+> task def." We chose EC2, so the compose file *is* the deployment.
+
+Sidecar note: it needs meaningful CPU/RAM for Chromium — give the instance at least
+1 vCPU / 2 GB (a `t3.small` is the practical floor; `t3.medium` is comfortable).
 
 ### 2b. Database
 
@@ -102,15 +110,109 @@ Sidecar note: it needs meaningful CPU/RAM for Chromium — give the task/instanc
 
 ---
 
-## 3. Suggested graduation path
+## 3. Deploy to a single EC2 instance (chosen path)
 
-1. `docker compose up` locally → confirm end-to-end (§1). ← **you are here after this change**
-2. Push both images to **ECR**.
-3. Stand up **RDS Postgres**; set `DATABASE_URL` to it.
-4. Run on **ECS Fargate** (one task, two containers) behind an ALB with **no public
-   listener** (or a private one) — no auth yet, so keep it unreachable from the internet.
-5. Move `GEMINI_API_KEY` + DB password into **Secrets Manager**.
-6. Only if/when needed: split migrations into a one-shot task, add auth, add an SQS-backed
-   worker for durable jobs.
+This runs the same two containers you tested locally, plus the `db` container, on one box.
+The production override ([docker-compose.prod.yml](docker-compose.prod.yml)) layers on
+restart policies, a secret-driven DB password, and — importantly — publishes the app on
+`127.0.0.1` only (no auth, so it must not be internet-reachable; you tunnel in over SSH).
 
-Steps 1–3 give you a real, persistent AWS deployment; 4–6 are the incremental hardening.
+### 3.1 Launch the instance
+
+- **AMI:** Amazon Linux 2023 (or Ubuntu 22.04). **Type:** `t3.medium` (2 vCPU / 4 GB) — the
+  sidecar's Chromium is the memory driver; `t3.small` works but is tight.
+- **Storage:** bump the root EBS volume to ~30 GB (the sidecar image + Postgres data live here).
+- **Security group:** inbound **SSH (22) from your IP only**. **No 8080 inbound** — the app
+  is bound to localhost and reached via SSH tunnel. Outbound: allow all (needs to reach
+  Gemini + kleinanzeigen.de).
+- If you later use **RDS** instead of the `db` container, put RDS in the same VPC and open
+  its security group to the instance's security group only.
+
+### 3.2 Install Docker + Compose plugin
+
+```sh
+# Amazon Linux 2023:
+sudo dnf install -y docker git
+sudo systemctl enable --now docker          # --now enables + starts; survives reboot
+sudo usermod -aG docker ec2-user            # re-login after this so `docker` needs no sudo
+# Compose v2 plugin:
+sudo mkdir -p /usr/local/lib/docker/cli-plugins
+sudo curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
+  -o /usr/local/lib/docker/cli-plugins/docker-compose
+sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+```
+
+### 3.3 Get the code (with the sidecar submodule)
+
+```sh
+git clone <your repo url> kleinanzeigen-agent
+cd kleinanzeigen-agent
+git submodule update --init          # pulls vendor/ebay-kleinanzeigen-api — REQUIRED
+```
+
+### 3.4 Provide secrets via a host env file (never committed)
+
+The prod override reads `GEMINI_API_KEY` and `POSTGRES_PASSWORD` from the environment and
+**fails loudly if either is missing** (verified). Simplest: a root-only env file.
+
+```sh
+umask 077                            # so the file is created 0600
+cat > ~/.kleinanzeigen.env <<'EOF'
+GEMINI_API_KEY=AI...your-real-key...
+POSTGRES_PASSWORD=$(openssl rand -hex 16)   # or paste your own
+# DATABASE_URL=postgresql+psycopg://user:pass@your-rds-host:5432/db   # only if using RDS
+EOF
+```
+
+> Toward production, move these to **AWS Secrets Manager / SSM Parameter Store** and fetch
+> them at boot instead of a file on disk — same values, not sitting in a home directory.
+
+### 3.5 Start it
+
+```sh
+set -a; . ~/.kleinanzeigen.env; set +a          # load env into the shell
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.prod.yml ps      # all healthy?
+docker compose -f docker-compose.yml -f docker-compose.prod.yml logs -f app   # watch migrations + boot
+```
+
+`restart: unless-stopped` + `systemctl enable docker` means the whole stack comes back
+after a reboot on its own.
+
+### 3.6 Reach the UI (no public port — tunnel in)
+
+From your laptop:
+
+```sh
+ssh -N -L 8080:127.0.0.1:8080 ec2-user@<instance-public-ip>
+# then open http://localhost:8080 in your browser
+```
+
+### 3.7 Verify (same checks that passed locally)
+
+```sh
+# on the instance:
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec db \
+  psql -U kleinanzeigen -d kleinanzeigen -c "SELECT version_num FROM alembic_version;"
+```
+
+Then run a small scan through the tunnelled UI and confirm rows land in `listings` /
+`analyses`, exactly as in the local smoke test.
+
+### 3.8 Data & backups
+
+Postgres data lives in the `pgdata` Docker volume on the instance's EBS disk. `docker
+compose down` keeps it; `down -v` wipes it. For real durability either **snapshot the EBS
+volume** on a schedule, or move to **RDS** (which backs itself up) by setting `DATABASE_URL`
+in the env file to the RDS endpoint — no code or image change.
+
+## 4. Later hardening (each independent, do when it hurts)
+
+- **RDS** instead of the `db` container — set `DATABASE_URL`; get managed backups/failover.
+- **Secrets Manager / SSM** instead of the env file.
+- **Auth + a real listener** — put an ALB (or Caddy/nginx with basic-auth) in front and
+  open 8080, *only after* there's auth. Until then, keep the SSH-tunnel model.
+- **Durable jobs** — background jobs are in-process (`BackgroundTasks`); a restart mid-scan
+  loses that run's progress. Move to SQS + a worker only if that becomes a real problem.
+- **Move to ECS Fargate** — if one box stops being enough; translate the two services to a
+  task definition (see §2a).
