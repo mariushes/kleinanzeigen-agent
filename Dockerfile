@@ -23,6 +23,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY app ./app
 COPY migrations ./migrations
 COPY alembic.ini ./
+# StaticFiles(directory=...) requires this dir to exist at startup. It's empty and git
+# doesn't track empty dirs, so guarantee it here regardless of what the build context had.
+RUN mkdir -p app/web/static
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 
