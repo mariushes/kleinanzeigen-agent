@@ -1,7 +1,9 @@
-from functools import lru_cache
+from functools import cached_property, lru_cache
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy import URL
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -9,7 +11,49 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    database_url: str = f"sqlite:///{BASE_DIR / 'data' / 'app.db'}"
+    # Two ways to specify the database, in priority order (see `database_url` below):
+    #  1. `DATABASE_URL` — a full SQLAlchemy URL. Used for local SQLite (the default) and
+    #     the local docker-compose `db` container, where there are no special-char secrets.
+    #  2. `DB_HOST` (+ DB_USER/DB_PASSWORD/DB_NAME/DB_SSLMODE/DB_SSLROOTCERT) — discrete
+    #     parts, assembled via SQLAlchemy's `URL.create`, which encodes the password
+    #     itself. This is the RDS path: the password comes straight from Secrets Manager
+    #     as a *raw* string and is never hand-URL-encoded in a shell, so there's exactly
+    #     one place (here) that knows how to build a connection.
+    # Reads the `DATABASE_URL` env var (kept as an alias so existing deploys/tests that set
+    # DATABASE_URL keep working); the computed `database_url` property is what callers use.
+    database_url_override: str | None = Field(default=None, validation_alias="DATABASE_URL")
+
+    db_host: str | None = None
+    db_port: int = 5432
+    db_user: str = "postgres"
+    db_password: str = ""
+    db_name: str = "postgres"
+    db_driver: str = "postgresql+psycopg"
+    db_sslmode: str | None = None          # e.g. "verify-full" for RDS
+    db_sslrootcert: str | None = None       # e.g. "/certs/global-bundle.pem"
+
+    @cached_property
+    def database_url(self) -> str:
+        """The effective SQLAlchemy URL. A full DATABASE_URL wins; otherwise assemble from
+        DB_* parts (URL.create handles password escaping). Falls back to local SQLite."""
+        if self.database_url_override:
+            return self.database_url_override
+        if self.db_host:
+            query = {}
+            if self.db_sslmode:
+                query["sslmode"] = self.db_sslmode
+            if self.db_sslrootcert:
+                query["sslrootcert"] = self.db_sslrootcert
+            return URL.create(
+                self.db_driver,
+                username=self.db_user,
+                password=self.db_password,  # raw; URL.create percent-encodes it
+                host=self.db_host,
+                port=self.db_port,
+                database=self.db_name,
+                query=query,
+            ).render_as_string(hide_password=False)
+        return f"sqlite:///{BASE_DIR / 'data' / 'app.db'}"
 
     gemini_api_key: str = ""
     llm_provider: str = "gemini"

@@ -39,14 +39,21 @@ DB_PASS="$(aws secretsmanager get-secret-value --secret-id "$SECRET_ARN" \
   --query SecretString --output text | jq -r '.password')"
 [ -n "$DB_PASS" ] && [ "$DB_PASS" != "null" ] || { echo "could not read .password from secret"; exit 1; }
 
-# --- 3. URL-encode the password so special chars don't break the URL ---
-DB_PASS_ENC="$(jq -rn --arg p "$DB_PASS" '$p|@uri')"
+# --- 3. export DB parts RAW; config.py assembles the URL via SQLAlchemy URL.create, which
+#        percent-encodes the password itself. No hand-encoding here (that previously tripped
+#        Alembic's configparser on `%`). One place owns URL assembly: app/config.py.
+export DB_HOST="$RDS_HOST"
+export DB_PORT="$RDS_PORT"
+export DB_USER="$RDS_USER"
+export DB_NAME="$RDS_DB"
+export DB_PASSWORD="$DB_PASS"                 # raw, un-encoded
+export DB_SSLMODE="verify-full"
+export DB_SSLROOTCERT="/certs/global-bundle.pem"
+# Make sure no stale full-URL override shadows the parts.
+unset DATABASE_URL
+echo "[deploy-rds] DB -> ${DB_USER}:***@${DB_HOST}:${DB_PORT}/${DB_NAME} (sslmode=verify-full)"
 
-# --- 4. assemble DATABASE_URL with verify-full + the mounted CA path ---
-export DATABASE_URL="postgresql+psycopg://${RDS_USER}:${DB_PASS_ENC}@${RDS_HOST}:${RDS_PORT}/${RDS_DB}?sslmode=verify-full&sslrootcert=/certs/global-bundle.pem"
-echo "[deploy-rds] DATABASE_URL -> postgresql+psycopg://${RDS_USER}:***@${RDS_HOST}:${RDS_PORT}/${RDS_DB}?sslmode=verify-full"
-
-# --- 5. bring the stack up against RDS (entrypoint runs alembic upgrade head) ---
+# --- 4. bring the stack up against RDS (entrypoint runs alembic upgrade head) ---
 docker compose -f docker-compose.yml -f docker-compose.rds.yml up -d "$@"
 
 echo "[deploy-rds] done. Follow migrations/boot with:"
