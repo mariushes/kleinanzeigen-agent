@@ -28,6 +28,10 @@ services:
       sidecar:
         condition: service_healthy
     environment:
+      # The base docker-compose.yml hardcodes DATABASE_URL (pointing at the local `db`
+      # container). config.py prioritizes DATABASE_URL over the DB_* parts, so that
+      # inherited value would shadow RDS. `!reset` drops it so only the parts below apply.
+      DATABASE_URL: !reset null
       # DB connection as discrete parts; app/config.py builds the SQLAlchemy URL from them.
       DB_HOST: ${DB_HOST:?set DB_HOST (see deploy-rds.sh)}
       DB_PORT: ${DB_PORT:-5432}
