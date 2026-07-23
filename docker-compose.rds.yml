@@ -1,0 +1,36 @@
+# RDS override: run app + sidecar against an external RDS Postgres instead of the local
+# `db` container. Layered on top of the base file (NOT together with docker-compose.prod.yml,
+# which wires the db container):
+#
+#   docker compose -f docker-compose.yml -f docker-compose.rds.yml up -d
+#
+# vs. the local-db setup this override:
+#   - drops the `db` service entirely (RDS replaces it) and the app's depends_on: db,
+#   - mounts the AWS RDS CA bundle read-only into the app so psycopg can verify-full,
+#   - keeps restart policies + the localhost-only app port (same rationale as prod).
+#
+# Required env on the host (assembled by deploy-rds.sh from Secrets Manager):
+#   DATABASE_URL  — postgresql+psycopg://USER:PASS@RDS-ENDPOINT:5432/DB?sslmode=verify-full&sslrootcert=/certs/global-bundle.pem
+#   GEMINI_API_KEY
+# The CA bundle must exist at ./certs/global-bundle.pem on the host (deploy-rds.sh fetches it).
+
+services:
+  db: !reset null          # remove the local Postgres container; RDS is the database now
+
+  sidecar:
+    restart: unless-stopped
+
+  app:
+    restart: unless-stopped
+    depends_on: !override
+      sidecar:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?assemble DATABASE_URL (see deploy-rds.sh)}
+      KLEINANZEIGEN_API_BASE_URL: http://sidecar:8000
+      GEMINI_API_KEY: ${GEMINI_API_KEY:?set GEMINI_API_KEY on the host}
+    volumes:
+      # RDS CA bundle for sslmode=verify-full. Read-only; path matches sslrootcert in DATABASE_URL.
+      - ./certs/global-bundle.pem:/certs/global-bundle.pem:ro
+    ports: !override
+      - "127.0.0.1:8080:8080"

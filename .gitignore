@@ -19,3 +19,6 @@ data/*.db-journal
 # Test/scrape fixtures the app may write during manual runs
 tests/fixtures/tmp/
 
+
+# RDS CA bundle is fetched on the host, not committed
+certs/
