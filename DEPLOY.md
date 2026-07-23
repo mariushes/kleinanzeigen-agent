@@ -203,13 +203,73 @@ Then run a small scan through the tunnelled UI and confirm rows land in `listing
 
 Postgres data lives in the `pgdata` Docker volume on the instance's EBS disk. `docker
 compose down` keeps it; `down -v` wipes it. For real durability either **snapshot the EBS
-volume** on a schedule, or move to **RDS** (which backs itself up) by setting `DATABASE_URL`
-in the env file to the RDS endpoint — no code or image change.
+volume** on a schedule, or move to **RDS** (§3.9) which backs itself up.
+
+### 3.9 RDS Postgres (the current data tier — DONE)
+
+This deployment runs against **RDS Postgres over `sslmode=verify-full` TLS**, with the DB
+password in **Secrets Manager**, fetched by the instance's **IAM role**. Instead of the
+local `db` container, use the RDS compose override via the deploy script:
+
+```sh
+cd ~/kleinanzeigen-agent
+./deploy-rds.sh              # add --build after pulling code changes
+docker compose -f docker-compose.yml -f docker-compose.rds.yml logs -f app
+```
+
+**How the pieces fit** (files: [deploy-rds.sh](deploy-rds.sh),
+[docker-compose.rds.yml](docker-compose.rds.yml), [app/config.py](app/config.py)):
+
+- `deploy-rds.sh` fetches the DB password from Secrets Manager (via the instance IAM role),
+  downloads the RDS CA bundle to `certs/global-bundle.pem`, and exports the connection as
+  **discrete `DB_*` parts** (`DB_HOST`, `DB_PASSWORD` **raw**, `DB_SSLMODE=verify-full`, …).
+- `app/config.py` assembles the SQLAlchemy URL from those parts via `URL.create`, which
+  percent-encodes the password itself. A full `DATABASE_URL` still wins if set (local
+  SQLite / the `db`-container path). **One place owns URL assembly** — no hand-encoding in
+  shells, which is what makes special-char RDS passwords safe.
+- `docker-compose.rds.yml` drops the `db` service, mounts the CA bundle read-only at
+  `/certs/global-bundle.pem`, and **`!reset`s the base file's hardcoded `DATABASE_URL`** so
+  the `DB_*` parts win.
+
+**Prerequisites** (all one-time, done):
+
+1. **RDS security group** allows `5432` inbound *from the EC2 security group* (a shared SG
+   is not enough — the rule must reference the SG). RDS **not** publicly accessible.
+2. **Instance IAM role** with `secretsmanager:GetSecretValue` on the DB secret ARN, attached
+   via EC2 → Actions → Security → Modify IAM role (takes effect in seconds, no reboot).
+3. `~/.kleinanzeigen.env` holds **only `GEMINI_API_KEY`** now — `DATABASE_URL` and
+   `POSTGRES_PASSWORD` were removed (they'd shadow the RDS parts).
+
+**Gotchas hit while wiring this up** (so they don't recur):
+
+- **Compose merges `environment` maps**, so the base file's `DATABASE_URL` survived into the
+  RDS deploy and — since config prioritizes it — pointed the app at the dead `db` host.
+  Fixed with `DATABASE_URL: !reset null` in the override. (Same class as the ports merge.)
+- **`%`-encoded passwords crash Alembic's ConfigParser** (`invalid interpolation syntax`).
+  `migrations/env.py` escapes `%`→`%%` when handing the URL to Alembic; SQLAlchemy un-escapes.
+- **A restarting container can't be `exec`'d or reliably inspected** — read the *image*'s
+  baked env and the compose merge output to find where a stray value comes from.
+
+**Verify it's really on RDS with TLS:**
+
+```sh
+docker exec kleinanzeigen-agent-app-1 python -c "
+from sqlalchemy import create_engine, text
+from app.config import get_settings
+with create_engine(get_settings().database_url).connect() as c:
+    print('head:', c.execute(text('SELECT version_num FROM alembic_version')).scalar())
+    print('ssl :', c.execute(text('SELECT ssl FROM pg_stat_ssl WHERE pid=pg_backend_pid()')).scalar())
+"
+```
+
+Expect the alembic head revision and `ssl: True`.
 
 ## 4. Later hardening (each independent, do when it hurts)
 
-- **RDS** instead of the `db` container — set `DATABASE_URL`; get managed backups/failover.
-- **Secrets Manager / SSM** instead of the env file.
+- ~~**RDS** instead of the `db` container~~ — **done, §3.9** (verify-full TLS).
+- ~~**Secrets Manager / SSM** instead of the env file~~ — **done** for the DB password
+  (§3.9). `GEMINI_API_KEY` still lives in `~/.kleinanzeigen.env`; move it to Secrets
+  Manager the same way if you want zero plaintext secrets.
 - **Auth + a real listener** — put an ALB (or Caddy/nginx with basic-auth) in front and
   open 8080, *only after* there's auth. Until then, keep the SSH-tunnel model.
 - **Durable jobs** — background jobs are in-process (`BackgroundTasks`); a restart mid-scan
