@@ -14,7 +14,7 @@ from app.db.models import KnowledgeEntry, Listing, SearchRun, VehicleIdentity
 from app.db.session import SessionLocal
 from app.knowledge.builder import build_knowledge_for_identity
 from app.knowledge.sources.web_search import WebSearchSource
-from app.llm.gemini import GeminiProvider
+from app.llm.factory import get_grounded_provider, get_structured_provider
 from app.llm.provider import LLMProvider
 from app.scraping.ingest import run_search
 from app.scraping.kleinanzeigen import KleinanzeigenClient
@@ -23,11 +23,18 @@ from app.vehicles.identity import get_or_create_identity
 
 
 def _maybe_auto_collect(
-    db, provider: LLMProvider, identity: VehicleIdentity, collected_identity_ids: set[int]
+    db,
+    structured_provider: LLMProvider,
+    grounded_provider: LLMProvider,
+    identity: VehicleIdentity,
+    collected_identity_ids: set[int],
 ) -> bool:
     """First knowledge pass for a never-researched identity, so the first verdict
     already has reliability data. Budgeted per search run; fail-soft: a grounding
-    failure (quota, network) must never break the listing analysis itself."""
+    failure (quota, network) must never break the listing analysis itself.
+
+    Knowledge collection needs BOTH providers: research is grounded (Gemini only),
+    extraction is structured (Bedrock or Gemini)."""
     settings = get_settings()
     if not settings.auto_collect_enabled:
         return False
@@ -52,8 +59,8 @@ def _maybe_auto_collect(
     try:
         build_knowledge_for_identity(
             db,
-            provider,
-            WebSearchSource(provider, db),
+            structured_provider,
+            WebSearchSource(grounded_provider, db),
             identity,
             max_queries=settings.auto_collect_max_queries,
         )
@@ -66,6 +73,7 @@ def execute_search_run(
     search_run_id: int,
     client: KleinanzeigenClient | None = None,
     provider: LLMProvider | None = None,
+    grounded_provider: LLMProvider | None = None,
 ) -> None:
     db = SessionLocal()
     try:
@@ -74,7 +82,9 @@ def execute_search_run(
         search_run.started_at = datetime.now(timezone.utc)
         db.commit()
 
-        provider = provider or GeminiProvider()
+        # `provider` handles structured analysis; grounded research stays on Gemini.
+        provider = provider or get_structured_provider()
+        grounded_provider = grounded_provider or get_grounded_provider()
         ingest_result = run_search(db, search_run.search_url, search_run.max_listings, client=client)
 
         search_run.counts = {
@@ -97,7 +107,7 @@ def execute_search_run(
             # model gets its first knowledge pass before its first verdict.
             if listing.identity_id is None:
                 get_or_create_identity(db, provider, listing)
-            if _maybe_auto_collect(db, provider, listing.identity, collected_identity_ids):
+            if _maybe_auto_collect(db, provider, grounded_provider, listing.identity, collected_identity_ids):
                 search_run.counts = {
                     **search_run.counts,
                     "knowledge_collected": len(collected_identity_ids),
@@ -124,6 +134,7 @@ def execute_reanalyze(
     listing_id: int,
     provider: LLMProvider | None = None,
     criteria_profile_id: int | None = None,
+    grounded_provider: LLMProvider | None = None,
 ) -> None:
     """Re-run the full analysis for one listing, e.g. after new knowledge was collected.
 
@@ -142,7 +153,8 @@ def execute_reanalyze(
         listing = db.get(Listing, listing_id)
         if listing is None:
             return
-        provider = provider or GeminiProvider()
+        provider = provider or get_structured_provider()
+        grounded_provider = grounded_provider or get_grounded_provider()
 
         # Same first-pass collection the search run does: a listing whose model has never
         # been researched would otherwise be re-analyzed knowledge-blind forever, since
@@ -150,19 +162,25 @@ def execute_reanalyze(
         # (it no-ops once entries or research runs exist) and fail-soft.
         if listing.identity_id is None:
             get_or_create_identity(db, provider, listing)
-        _maybe_auto_collect(db, provider, listing.identity, set())
+        _maybe_auto_collect(db, provider, grounded_provider, listing.identity, set())
 
         run_full_analysis(db, provider, listing, profile=get_profile(db, criteria_profile_id))
     finally:
         db.close()
 
 
-def execute_knowledge_run(identity_id: int, provider: LLMProvider | None = None) -> None:
+def execute_knowledge_run(
+    identity_id: int,
+    provider: LLMProvider | None = None,
+    grounded_provider: LLMProvider | None = None,
+) -> None:
     """Collect reliability knowledge for one vehicle identity, on demand from the admin UI.
 
     Kept separate from the search-run pipeline: knowledge collection is deliberately
     manual (it spends grounded free-tier quota) rather than firing automatically for
     every identity a scrape happens to surface.
+
+    Research is grounded (Gemini); extraction is structured (the selected provider).
     """
     settings = get_settings()
     db = SessionLocal()
@@ -170,8 +188,9 @@ def execute_knowledge_run(identity_id: int, provider: LLMProvider | None = None)
         identity = db.get(VehicleIdentity, identity_id)
         if identity is None:
             return
-        provider = provider or GeminiProvider()
-        source = WebSearchSource(provider, db)
+        provider = provider or get_structured_provider()
+        grounded_provider = grounded_provider or get_grounded_provider()
+        source = WebSearchSource(grounded_provider, db)
         build_knowledge_for_identity(
             db, provider, source, identity, max_queries=settings.knowledge_default_max_queries
         )

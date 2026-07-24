@@ -102,7 +102,7 @@ def test_execute_search_run_happy_path(tmp_path):
             ]
         )
 
-        execute_search_run(run_id, client=client, provider=provider)
+        execute_search_run(run_id, client=client, provider=provider, grounded_provider=provider)
 
         db = TestSession()
         run = db.get(SearchRun, run_id)
@@ -134,7 +134,7 @@ def test_execute_search_run_marks_error_on_failure(tmp_path):
             def search_by_url(self, *a, **kw):
                 raise RuntimeError("sidecar unreachable")
 
-        execute_search_run(run_id, client=ExplodingClient(), provider=FakeProvider([]))
+        execute_search_run(run_id, client=ExplodingClient(), provider=FakeProvider([]), grounded_provider=FakeProvider([]))
 
         db = TestSession()
         run = db.get(SearchRun, run_id)
@@ -200,7 +200,7 @@ def test_execute_search_run_auto_collects_for_new_identity(tmp_path, monkeypatch
             ]
         )
 
-        execute_search_run(run_id, client=client, provider=provider)
+        execute_search_run(run_id, client=client, provider=provider, grounded_provider=provider)
 
         db = TestSession()
         run = db.get(SearchRun, run_id)
@@ -238,7 +238,8 @@ def test_auto_collect_skips_identity_with_existing_entries(tmp_path):
         def grounded_completion(self, **kw):
             raise AssertionError("should not collect for an identity with entries")
 
-    attempted = _maybe_auto_collect(db, MustNotBeCalledProvider(), identity, set())
+    p = MustNotBeCalledProvider()
+    attempted = _maybe_auto_collect(db, p, p, identity, set())
     assert attempted is False
 
 
@@ -295,7 +296,7 @@ def test_execute_reanalyze_auto_collects_for_a_never_researched_identity(tmp_pat
             a_judgment(),
         ])
 
-        execute_reanalyze(listing_id, provider=provider)
+        execute_reanalyze(listing_id, provider=provider, grounded_provider=provider)
 
         db = TestSession()
         assert db.query(KnowledgeEntry).count() == 1
@@ -339,9 +340,8 @@ def test_execute_reanalyze_does_not_recollect_for_a_researched_identity(tmp_path
         listing_id = listing.id
         db.close()
 
-        execute_reanalyze(
-            listing_id, provider=MustNotGroundProvider([clean_condition(), a_judgment()])
-        )
+        mng = MustNotGroundProvider([clean_condition(), a_judgment()])
+        execute_reanalyze(listing_id, provider=mng, grounded_provider=mng)
 
         db = TestSession()
         assert db.query(KnowledgeEntry).count() == 1  # unchanged
@@ -380,7 +380,8 @@ def test_auto_collect_retries_an_identity_whose_research_run_produced_no_entries
             collected.append(kw)
             raise RuntimeError("grounding unavailable")  # fail-soft path
 
-    attempted = _maybe_auto_collect(db, RecordingProvider(), identity, set())
+    rec = RecordingProvider()
+    attempted = _maybe_auto_collect(db, rec, rec, identity, set())
 
     assert attempted is True, "an identity with zero entries must be retried"
     assert collected, "collection should actually have been attempted"

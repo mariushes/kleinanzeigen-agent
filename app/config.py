@@ -56,20 +56,39 @@ class Settings(BaseSettings):
         return f"sqlite:///{BASE_DIR / 'data' / 'app.db'}"
 
     gemini_api_key: str = ""
-    llm_provider: str = "gemini"
 
-    # AWS Bedrock (prototype: structured/analysis calls can run on Bedrock while grounded
-    # research stays on Gemini). Auth is via the instance IAM role, so no key here — only
-    # the region. Provider selection + model IDs are added when the split is wired in.
+    # --- Provider split ---------------------------------------------------------------
+    # The 5 structured/analysis calls (identity, condition, criteria, judgment, extraction)
+    # and the 1 grounded web-research call can use DIFFERENT providers. Grounded search has
+    # no Bedrock equivalent, so it stays on Gemini even when structured runs on Bedrock.
+    llm_structured_provider: str = "gemini"   # "gemini" | "bedrock"
+    llm_grounded_provider: str = "gemini"     # "gemini" only (bedrock can't ground)
+
+    # AWS Bedrock — auth is via the instance IAM role (no key), only the region + model ids.
     bedrock_region: str = "eu-central-1"
-    llm_model_fast: str = "gemini-3.1-flash-lite"
+    bedrock_model_fast: str = "qwen.qwen3-235b-a22b-2507-v1:0"
+    bedrock_model_quality: str = "qwen.qwen3-235b-a22b-2507-v1:0"
+
+    # Gemini model ids.
+    gemini_model_fast: str = "gemini-3.1-flash-lite"
     # gemini-3-flash-preview's free-tier daily quota is small and shared across all dev
     # work; default to flash-lite everywhere until we're ready to spend that budget
     # deliberately (e.g. a real end-to-end run), overriding per-call when it matters.
-    llm_model_quality: str = "gemini-3.1-flash-lite"
+    gemini_model_quality: str = "gemini-3.1-flash-lite"
     # Only 2.5-flash has google_search grounding quota on the free tier (the 3.x models
     # return 429 for grounded calls regardless of remaining daily quota).
     llm_model_grounded: str = "gemini-2.5-flash"
+
+    @property
+    def llm_model_fast(self) -> str:
+        """The 'fast' model id for the selected STRUCTURED provider. Call sites pass this
+        to structured_completion, so it must match whichever provider will handle the call."""
+        return self.bedrock_model_fast if self.llm_structured_provider == "bedrock" else self.gemini_model_fast
+
+    @property
+    def llm_model_quality(self) -> str:
+        """The 'quality' model id for the selected STRUCTURED provider (see llm_model_fast)."""
+        return self.bedrock_model_quality if self.llm_structured_provider == "bedrock" else self.gemini_model_quality
     # Free-tier Gemini rate limits are per-project (as low as 10 RPM on gemini-3-flash-preview).
     # We throttle client-side to this interval rather than burning through the daily quota on 429 retries.
     llm_min_call_interval_seconds: float = 6.5
