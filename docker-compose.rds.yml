@@ -42,6 +42,10 @@ services:
       DB_SSLROOTCERT: ${DB_SSLROOTCERT:-/certs/global-bundle.pem}
       KLEINANZEIGEN_API_BASE_URL: http://sidecar:8000
       GEMINI_API_KEY: ${GEMINI_API_KEY:?set GEMINI_API_KEY on the host}
+      # Provider split: structured/analysis calls (default gemini; set "bedrock" for Qwen);
+      # grounded web research stays on gemini. Bedrock auth is the instance IAM role.
+      LLM_STRUCTURED_PROVIDER: ${LLM_STRUCTURED_PROVIDER:-gemini}
+      AWS_REGION: ${AWS_REGION:-eu-central-1}
     volumes:
       # RDS CA bundle for sslmode=verify-full. Read-only; path matches sslrootcert in DATABASE_URL.
       - ./certs/global-bundle.pem:/certs/global-bundle.pem:ro
