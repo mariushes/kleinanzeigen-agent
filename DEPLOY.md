@@ -220,9 +220,11 @@ docker compose -f docker-compose.yml -f docker-compose.rds.yml logs -f app
 **How the pieces fit** (files: [deploy-rds.sh](deploy-rds.sh),
 [docker-compose.rds.yml](docker-compose.rds.yml), [app/config.py](app/config.py)):
 
-- `deploy-rds.sh` fetches the DB password from Secrets Manager (via the instance IAM role),
-  downloads the RDS CA bundle to `certs/global-bundle.pem`, and exports the connection as
-  **discrete `DB_*` parts** (`DB_HOST`, `DB_PASSWORD` **raw**, `DB_SSLMODE=verify-full`, …).
+- `deploy-rds.sh` fetches **both secrets** from Secrets Manager (via the instance IAM role):
+  the DB password and the **Gemini API key** (`GEMINI_API_KEY` field in a dedicated secret;
+  falls back to an env-provided key for local runs). It downloads the RDS CA bundle to
+  `certs/global-bundle.pem` and exports the connection as **discrete `DB_*` parts**
+  (`DB_HOST`, `DB_PASSWORD` **raw**, `DB_SSLMODE=verify-full`, …). No secret touches disk.
 - `app/config.py` assembles the SQLAlchemy URL from those parts via `URL.create`, which
   percent-encodes the password itself. A full `DATABASE_URL` still wins if set (local
   SQLite / the `db`-container path). **One place owns URL assembly** — no hand-encoding in
@@ -235,10 +237,12 @@ docker compose -f docker-compose.yml -f docker-compose.rds.yml logs -f app
 
 1. **RDS security group** allows `5432` inbound *from the EC2 security group* (a shared SG
    is not enough — the rule must reference the SG). RDS **not** publicly accessible.
-2. **Instance IAM role** with `secretsmanager:GetSecretValue` on the DB secret ARN, attached
-   via EC2 → Actions → Security → Modify IAM role (takes effect in seconds, no reboot).
-3. `~/.kleinanzeigen.env` holds **only `GEMINI_API_KEY`** now — `DATABASE_URL` and
-   `POSTGRES_PASSWORD` were removed (they'd shadow the RDS parts).
+2. **Instance IAM role** (`kleinanzeigen-ec2-secrets`) with `secretsmanager:GetSecretValue`
+   on **both** secret ARNs (DB password + Gemini key), attached via EC2 → Actions →
+   Security → Modify IAM role (takes effect in seconds, no reboot).
+3. `~/.kleinanzeigen.env` is now **empty of secrets** — the DB password and Gemini key both
+   come from Secrets Manager; `DATABASE_URL`/`POSTGRES_PASSWORD` were removed (they'd shadow
+   the RDS parts). No plaintext secret remains on the instance.
 
 **Gotchas hit while wiring this up** (so they don't recur):
 
@@ -267,9 +271,8 @@ Expect the alembic head revision and `ssl: True`.
 ## 4. Later hardening (each independent, do when it hurts)
 
 - ~~**RDS** instead of the `db` container~~ — **done, §3.9** (verify-full TLS).
-- ~~**Secrets Manager / SSM** instead of the env file~~ — **done** for the DB password
-  (§3.9). `GEMINI_API_KEY` still lives in `~/.kleinanzeigen.env`; move it to Secrets
-  Manager the same way if you want zero plaintext secrets.
+- ~~**Secrets Manager / SSM** instead of the env file~~ — **done** for both the DB password
+  and the Gemini API key (§3.9). No plaintext secrets remain on the instance.
 - **Auth + a real listener** — put an ALB (or Caddy/nginx with basic-auth) in front and
   open 8080, *only after* there's auth. Until then, keep the SSH-tunnel model.
 - **Durable jobs** — background jobs are in-process (`BackgroundTasks`); a restart mid-scan
