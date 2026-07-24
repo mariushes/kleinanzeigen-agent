@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Deploy the app + sidecar against RDS Postgres. Run ON THE EC2 INSTANCE, from the repo root.
-# Fetches the DB password from Secrets Manager (via the instance's IAM role), downloads the
-# RDS CA bundle for sslmode=verify-full, assembles DATABASE_URL, and brings the stack up.
+# Fetches BOTH secrets from Secrets Manager (via the instance's IAM role) — the DB password
+# and the Gemini API key — downloads the RDS CA bundle for sslmode=verify-full, and brings
+# the stack up. Nothing secret is stored on the host's disk.
 #
 #   ./deploy-rds.sh
 #
-# Requires on the host: GEMINI_API_KEY in the environment (or ~/.kleinanzeigen.env), the
-# instance IAM role granting secretsmanager:GetSecretValue on $SECRET_ARN, and network
-# reachability to RDS:5432.
+# Requires on the host: the instance IAM role granting secretsmanager:GetSecretValue on both
+# $DB_SECRET_ARN and $GEMINI_SECRET_ARN, and network reachability to RDS:5432.
+# For LOCAL runs (no IAM role), set GEMINI_API_KEY in the environment to skip its fetch.
 set -euo pipefail
 
 # --- RDS connection facts (edit here if the instance/secret changes) ---
@@ -15,16 +16,20 @@ RDS_HOST="kleinanzeigen-agent-database.cdkuci8gs2zb.eu-central-1.rds.amazonaws.c
 RDS_PORT=5432
 RDS_USER="postgres"
 RDS_DB="postgres"
-SECRET_ARN="arn:aws:secretsmanager:eu-central-1:437952802416:secret:rds!db-c930822c-d881-46ea-99ac-7131ca8dc57a-jWJfpp"
+DB_SECRET_ARN="arn:aws:secretsmanager:eu-central-1:437952802416:secret:rds!db-c930822c-d881-46ea-99ac-7131ca8dc57a-jWJfpp"
+GEMINI_SECRET_ARN="arn:aws:secretsmanager:eu-central-1:437952802416:secret:kleinanzeigen-agent-gemini-key-4CO1AM"
 CA_URL="https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem"
 
 cd "$(dirname "$0")"
 
-# --- load GEMINI_API_KEY (and anything else) from the env file if present ---
-if [ -f ~/.kleinanzeigen.env ]; then
-  set -a; . ~/.kleinanzeigen.env; set +a
+# --- Gemini API key: prefer Secrets Manager; fall back to an already-set env var (local) ---
+if [ -z "${GEMINI_API_KEY:-}" ]; then
+  echo "[deploy-rds] fetching Gemini API key from Secrets Manager..."
+  export GEMINI_API_KEY="$(aws secretsmanager get-secret-value --secret-id "$GEMINI_SECRET_ARN" \
+    --query SecretString --output text | jq -r '.GEMINI_API_KEY')"
 fi
-: "${GEMINI_API_KEY:?set GEMINI_API_KEY (in ~/.kleinanzeigen.env or the environment)}"
+[ -n "${GEMINI_API_KEY:-}" ] && [ "$GEMINI_API_KEY" != "null" ] || {
+  echo "could not obtain GEMINI_API_KEY (from Secrets Manager or the environment)"; exit 1; }
 
 # --- 1. RDS CA bundle for verify-full (mounted into the app container) ---
 mkdir -p certs
@@ -35,7 +40,7 @@ fi
 
 # --- 2. DB password from Secrets Manager (never written to disk) ---
 echo "[deploy-rds] fetching DB password from Secrets Manager..."
-DB_PASS="$(aws secretsmanager get-secret-value --secret-id "$SECRET_ARN" \
+DB_PASS="$(aws secretsmanager get-secret-value --secret-id "$DB_SECRET_ARN" \
   --query SecretString --output text | jq -r '.password')"
 [ -n "$DB_PASS" ] && [ "$DB_PASS" != "null" ] || { echo "could not read .password from secret"; exit 1; }
 
