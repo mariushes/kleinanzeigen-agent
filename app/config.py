@@ -57,6 +57,11 @@ class Settings(BaseSettings):
 
     gemini_api_key: str = ""
     llm_provider: str = "gemini"
+
+    # AWS Bedrock (prototype: structured/analysis calls can run on Bedrock while grounded
+    # research stays on Gemini). Auth is via the instance IAM role, so no key here — only
+    # the region. Provider selection + model IDs are added when the split is wired in.
+    bedrock_region: str = "eu-central-1"
     llm_model_fast: str = "gemini-3.1-flash-lite"
     # gemini-3-flash-preview's free-tier daily quota is small and shared across all dev
     # work; default to flash-lite everywhere until we're ready to spend that budget
